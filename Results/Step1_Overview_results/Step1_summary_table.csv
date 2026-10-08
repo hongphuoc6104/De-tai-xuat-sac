@@ -1,0 +1,26 @@
+Metric,Value
+Total WSI,2802.0
+Slides with image files,364.0
+Slides without image files,2438.0
+Slides with masks,0.0
+Slides without masks,2802.0
+Rows with missing ISUP grade,0.0
+ISUP max class count,2298.0
+ISUP min class count,66.0
+ISUP imbalance ratio (max/min),34.82
+ISUP entropy,0.921
+ISUP normalized entropy,0.46
+ISUP 0 slides,2298.0
+ISUP 0 (%),82.01
+ISUP 3 slides,66.0
+ISUP 3 (%),2.36
+ISUP 4 slides,301.0
+ISUP 4 (%),10.74
+ISUP 5 slides,137.0
+ISUP 5 (%),4.89
+Lens 10X slides,830.0
+Lens 10X (%),29.62
+Lens 40X slides,1608.0
+Lens 40X (%),57.39
+Lens 4X slides,364.0
+Lens 4X (%),12.99
