@@ -22,6 +22,9 @@ env/
 .worktrees/
 worktrees/
 
+# Tool artifacts
+.lavish/
+
 # OS / Editor
 .DS_Store
 Thumbs.db
