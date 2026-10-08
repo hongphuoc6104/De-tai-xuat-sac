@@ -1,0 +1,6 @@
+{
+  "dir": ".worktrees",
+  "defaultTargetBranch": "current",
+  "lockExpiryMinutes": 60,
+  "setup-worktree": []
+}
