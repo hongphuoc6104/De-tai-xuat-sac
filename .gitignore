@@ -1,0 +1,27 @@
+# Datasets and Large Media Files
+train_images/
+*.png
+*.jpg
+*.jpeg
+*.tif
+*.tiff
+*.svs
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.ipynb_checkpoints/
+venv/
+.venv/
+env/
+
+# Worktree directories
+.worktrees/
+worktrees/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
