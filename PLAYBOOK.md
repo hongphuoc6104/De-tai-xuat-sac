@@ -21,6 +21,7 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 | Tên Skill | Mô tả ngắn kích hoạt | Đường dẫn |
 | :--- | :--- | :--- |
 | colab-manager | Quản lý profile/phiên Colab, bộ đếm GPU cục bộ và luân phiên profile khi gặp lỗi quota/capacity | [.agents/skills/colab-manager/SKILL.md](file:///data/đề tài xuất sắc/.agents/skills/colab-manager/SKILL.md) |
+| `histology-shards` | QC, packing, instance coordinates và verified resume trên local smoke/Colab | [.agents/skills/histology-shards/SKILL.md](.agents/skills/histology-shards/SKILL.md) |
 | `gh-axi` | Thao tác GitHub qua CLI tối ưu token TOON (issues, PRs, CI, repo, release) | [.agents/skills/gh-axi/SKILL.md](file:///data/đề tài xuất sắc/.agents/skills/gh-axi/SKILL.md) |
 | `treehouse` | Quản lý Git worktree cô lập cho đa Agent song song (.worktrees) | [.agents/skills/treehouse/SKILL.md](file:///data/đề tài xuất sắc/.agents/skills/treehouse/SKILL.md) |
 | `lavish` | Báo cáo trực quan HTML tương tác và giao diện phản biện đa năng | [.agents/skills/lavish/SKILL.md](file:///data/đề tài xuất sắc/.agents/skills/lavish/SKILL.md) |
@@ -59,3 +60,18 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - **Giả định sai (Wrong Assumptions):** Giả định cùng một quy tắc quote có thể dùng cho mọi giá trị trong unit file.
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Escape dấu cách của WorkingDirectory= thành \x20, giữ quote riêng cho từng đối số ExecStart; kiểm tra lại unit bằng systemd-analyze --user verify và test hồi quy E2E, cả hai đều pass.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Dùng cú pháp escape theo loại directive của systemd; không áp dụng shell quoting vào giá trị đường dẫn trong unit file.
+
+
+## V. Bài học đã chuyển thành skill
+
+- [ERR-20261009-03] Smoke I/O và cân bằng lớp: xem histology-shards/references/failures.md.
+- [ERR-20261009-04] Directory/ZIP mixed sources: xem histology-shards/references/failures.md.
+- [ERR-20261009-05] Targeted staging và catalog cache: xem histology-shards/references/failures.md.
+- [ERR-20261009-06] Instance/content tile identity: xem histology-shards/references/failures.md.
+- [ERR-20261009-07] Resume/version/SSD cleanup: xem histology-shards/references/failures.md.
+- [ERR-20261009-08] Raw duplicate leakage và typed review: xem histology-shards/references/failures.md.
+- [ERR-20261009-09] Notebook import order bị bỏ sót ở lint riêng: xem histology-shards/references/failures.md.
+- [ERR-20261009-10] Nền ám màu bị giữ như mô: xem histology-shards/references/failures.md.
+- [ERR-20261009-11] Local pytest wrapper che lỗi import CI: xem histology-shards/references/failures.md.
+
+Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).

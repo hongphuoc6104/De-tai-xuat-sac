@@ -14,6 +14,11 @@
 *.tif
 *.tiff
 *.svs
+*.npz
+*.npy
+dist/
+Results/data_smoke/
+Results/shard_data/
 
 # Local study metadata may contain coded patient or slide identifiers
 /Metadata.xlsx
