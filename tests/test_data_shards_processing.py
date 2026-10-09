@@ -9,11 +9,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from histology_data.shards import pack_catalog
 from PIL import Image
 
+from histology_data import processing as processing_module
 from histology_data.catalog import build_catalog
 from histology_data.processing import process_shard
+from histology_data.shards import pack_catalog
 
 
 def _make_release(root: Path, pixels: np.ndarray | None = None,
@@ -57,6 +58,7 @@ def test_processing_preserves_coordinates_padding_and_provenance(tmp_path: Path)
                             "blur_threshold": 1_000_000.0})
 
     assert result["reused"] is False
+    assert result["processing_version"] == "cpu-tiles-v2"
     assert result["tiles_written"] == 2
     rows = _rows(tmp_path / "output" / shard_id / result["processing_id"] / "tiles.jsonl")
     assert [(row["x"], row["y"], row["w"], row["h"], row["valid_w"], row["valid_h"])
@@ -101,7 +103,17 @@ def test_no_tissue_is_saved_as_review_qc_without_patch_targets(tmp_path: Path) -
         assert archive.getmembers() == []
 
 
-def test_cap_marks_output_smoke_and_resume_verifies_committed_files(tmp_path: Path) -> None:
+def test_cap_marks_output_smoke_and_resume_verifies_committed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stage_calls = []
+    real_stage = processing_module.stage_shard
+
+    def counted_stage(*args: object, **kwargs: object) -> tuple[Path, dict[str, object]]:
+        stage_calls.append(args[1])
+        return real_stage(*args, **kwargs)
+
+    monkeypatch.setattr(processing_module, "stage_shard", counted_stage)
     release, shard_id = _make_release(tmp_path, _tissue_image(8, 4))
     config = {"tile_size": 4, "stride": 4, "min_tissue": 0.1,
               "max_tiles_per_image": 1}
@@ -111,13 +123,40 @@ def test_cap_marks_output_smoke_and_resume_verifies_committed_files(tmp_path: Pa
     assert first["tiles_written"] == 1
     assert first["mode"] == "smoke"
     assert first["training_ready"] is False
+    assert first["staged_path"] is None
+    assert not (tmp_path / "ssd" / "staged" / first["catalog_id"] / shard_id).exists()
     assert resumed["reused"] is True
+    assert resumed["staged_path"] is None
     assert resumed["processing_id"] == first["processing_id"]
 
     tiles_path = tmp_path / "output" / shard_id / first["processing_id"] / "tiles.jsonl"
     tiles_path.write_text(tiles_path.read_text(encoding="utf-8") + "{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="checksum mismatch"):
         process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output", config)
+    assert stage_calls == [shard_id]
+
+
+def test_keep_staged_is_runtime_only_and_can_be_cleared_on_resume(tmp_path: Path) -> None:
+    release, shard_id = _make_release(tmp_path, _tissue_image(8, 4))
+    config = {"tile_size": 4, "stride": 4, "min_tissue": 0.1}
+    first = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                          config, keep_staged=True)
+    retained = Path(first["staged_path"])
+    assert retained.is_dir()
+
+    resumed_keep = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                                 config, keep_staged=True)
+    assert resumed_keep["reused"] is True
+    assert resumed_keep["processing_id"] == first["processing_id"]
+    assert resumed_keep["staged_path"] == str(retained)
+    assert retained.is_dir()
+
+    resumed_cleanup = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                                    config, keep_staged=False)
+    assert resumed_cleanup["reused"] is True
+    assert resumed_cleanup["processing_id"] == first["processing_id"]
+    assert resumed_cleanup["staged_path"] is None
+    assert not retained.exists()
 
 
 def test_tile_ids_are_stable_across_release_and_work_paths(tmp_path: Path) -> None:
@@ -132,6 +171,45 @@ def test_tile_ids_are_stable_across_release_and_work_paths(tmp_path: Path) -> No
 
     assert result_a["catalog_id"] == result_b["catalog_id"]
     assert [row["tile_id"] for row in rows_a] == [row["tile_id"] for row in rows_b]
+
+
+def test_identical_fields_keep_unique_tile_instances_and_review_duplicate_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    image_buffer = io.BytesIO()
+    Image.fromarray(_tissue_image(32, 32), mode="RGB").save(image_buffer, format="PNG")
+    identical_png = image_buffer.getvalue()
+    (source / "field-a.png").write_bytes(identical_png)
+    (source / "field-b.png").write_bytes(identical_png)
+    metadata = tmp_path / "metadata.csv"
+    with metadata.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["Ten_File", "Ma_Nam", "Ma_So", "Do_Phong_Dai", "Glade",
+                         "Ket_Luan", "Ten_Slide"])
+        writer.writerow(["field-a.png", "2020", "001", "10x", "G3", "review pending", "slide-a"])
+        writer.writerow(["field-b.png", "2020", "001", "10x", "G3", "review pending", "slide-a"])
+    catalog = build_catalog(metadata, [source], lenses=[10], labels_reviewed=False)
+    release = tmp_path / "release"
+    descriptor = pack_catalog(catalog, release, max_bytes=1_000_000)
+    assert len(descriptor["shards"]) == 1
+    shard_id = descriptor["shards"][0]["shard_id"]
+
+    result = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                           {"tile_size": 16, "stride": 16, "min_tissue": 0.2})
+
+    directory = Path(result["output_path"])
+    tiles = _rows(directory / "tiles.jsonl")
+    qc = _rows(directory / "qc.jsonl")
+    assert result["tiles_written"] == 8
+    assert len({row["tile_id"] for row in tiles}) == 8
+    assert len({row["content_tile_id"] for row in tiles}) == 4
+    assert {row["image_id"] for row in tiles} == {"field-a", "field-b"}
+    assert all(row["duplicate_source_content"] is True for row in qc)
+    assert all(row["duplicate_source_image_ids"] == ["field-a", "field-b"] for row in qc)
+    assert all("duplicate_source_content" in row["reasons"] for row in qc)
+    assert result["review_required"] is True
 
 
 def test_corrupt_image_fails_without_publishing_success(tmp_path: Path) -> None:

@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from .io import atomic_json, file_hash, fingerprint, verified_copy
-from .shards import stage_shard
+from .shards import load_shard_manifest, stage_shard
 
 DEFAULT_CONFIG: dict[str, int | float] = {
     "tile_size": 256,
@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, int | float] = {
     "max_tiles_per_image": 0,
     "blur_threshold": 0.0,
 }
+PROCESSING_VERSION = "cpu-tiles-v2"
 _MAX_TILE_SIZE = 4096
 _IMAGE_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 _LENSES = {4, 10, 40}
@@ -179,9 +180,21 @@ def _focus_score(rgb: np.ndarray) -> float:
     return max(0.0, total_squared / count - mean * mean)
 
 
-def _tile_id(image_sha256: str, x: int, y: int, width: int, height: int, config_id: str) -> str:
+def _content_tile_id(
+    image_sha256: str, x: int, y: int, width: int, height: int, config_id: str,
+) -> str:
     return fingerprint({"image_sha256": image_sha256, "x": x, "y": y,
-                       "w": width, "h": height, "config_id": config_id})
+                        "w": width, "h": height, "config_id": config_id})
+
+
+def _tile_id(
+    image_id: str, image_sha256: str, x: int, y: int, width: int, height: int,
+    config_id: str,
+) -> str:
+    """Identify a source tile instance, including its stable catalog identity."""
+    return fingerprint({"image_id": image_id, "image_sha256": image_sha256,
+                        "x": x, "y": y, "w": width, "h": height,
+                        "config_id": config_id})
 
 
 def _tar_info(name: str, size: int) -> tarfile.TarInfo:
@@ -224,9 +237,15 @@ def _iter_tiles(
             else:
                 tile = np.full((tile_size, tile_size, 3), 255, dtype=np.uint8)
                 tile[:valid_h, :valid_w] = rgb[y:y + valid_h, x:x + valid_w]
-            identifier = _tile_id(image_sha256, x, y, tile_size, tile_size, config_id)
+            content_identifier = _content_tile_id(
+                image_sha256, x, y, tile_size, tile_size, config_id,
+            )
+            identifier = _tile_id(
+                image["image_id"], image_sha256, x, y, tile_size, tile_size, config_id,
+            )
             row = {
                 "tile_id": identifier,
+                "content_tile_id": content_identifier,
                 "patch_member": f"patches/{identifier}.png",
                 "image_id": image["image_id"],
                 "case_id": image.get("case_id"),
@@ -257,8 +276,16 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
                     config_id: str, patches_path: Path, tiles_path: Path,
                     qc_path: Path) -> dict[str, int]:
     stats = {"images_seen": 0, "tiles_written": 0, "images_review": 0,
+             "images_duplicate_source": 0,
              "images_no_tissue": 0, "tiles_below_tissue_threshold": 0}
     images = _manifest_images(manifest)
+    duplicate_source_ids: dict[str, list[str]] = {}
+    source_ids_by_hash: dict[str, list[str]] = {}
+    for image in images:
+        source_ids_by_hash.setdefault(image["sha256"], []).append(image["image_id"])
+    for image_sha256, image_ids in source_ids_by_hash.items():
+        if len(image_ids) > 1:
+            duplicate_source_ids[image_sha256] = sorted(image_ids)
     with tarfile.open(patches_path, mode="w", format=tarfile.PAX_FORMAT) as patches, \
             tiles_path.open("w", encoding="utf-8", newline="\n") as tiles, \
             qc_path.open("w", encoding="utf-8", newline="\n") as qc:
@@ -298,6 +325,10 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
             if tissue <= 0.0:
                 reasons.append("no_tissue")
                 stats["images_no_tissue"] += 1
+            repeated_image_ids = duplicate_source_ids.get(actual_sha, [])
+            if repeated_image_ids:
+                reasons.append("duplicate_source_content")
+                stats["images_duplicate_source"] += 1
             if float(config["blur_threshold"]) > 0 and focus < float(config["blur_threshold"]):
                 reasons.append("focus_below_review_threshold")
             eligible = 0
@@ -327,6 +358,8 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
                 "patient_id": image.get("patient_id"),
                 "bag_id": image.get("slide_group_id"),
                 "source_sha256": actual_sha,
+                "duplicate_source_content": bool(repeated_image_ids),
+                "duplicate_source_image_ids": repeated_image_ids,
                 "source_mode": source_mode,
                 "output_mode": "RGB",
                 "width": source_width,
@@ -390,6 +423,8 @@ def _verify_output(directory: Path, expected_processing_id: str | None = None,
         raise ValueError("Invalid processing commit marker.") from exc
     if not isinstance(commit, dict) or commit.get("complete") is not True:
         raise ValueError("Processing commit marker is incomplete.")
+    if commit.get("processing_version") != PROCESSING_VERSION:
+        raise ValueError("Processing output was produced by an incompatible processing version.")
     for name, expected in (("processing_id", expected_processing_id),
                            ("config_id", expected_config_id),
                            ("catalog_id", expected_catalog_id)):
@@ -411,11 +446,17 @@ def _verify_output(directory: Path, expected_processing_id: str | None = None,
     if len(tile_rows) != commit.get("tiles_written") or len(qc_rows) != commit.get("images_seen"):
         raise ValueError("Processing output record counts do not match commit.")
     tile_ids = [row.get("tile_id") for row in tile_rows]
+    content_tile_ids = [row.get("content_tile_id") for row in tile_rows]
     if any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in tile_ids):
         raise ValueError("Invalid tile ID in processing metadata.")
+    if any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item)
+           for item in content_tile_ids):
+        raise ValueError("Invalid content tile ID in processing metadata.")
     if len(tile_ids) != len(set(tile_ids)):
         raise ValueError("Duplicate tile ID in processing metadata.")
     expected_members = {f"patches/{tile_id}.png" for tile_id in tile_ids}
+    if any(row.get("patch_member") != f"patches/{row['tile_id']}.png" for row in tile_rows):
+        raise ValueError("Patch member references do not match tile IDs.")
     try:
         with tarfile.open(directory / "patches.tar", mode="r:") as archive:
             members = archive.getmembers()
@@ -442,9 +483,12 @@ def _verify_output(directory: Path, expected_processing_id: str | None = None,
 
 
 def process_shard(release_root: Path, shard_id: str, work_root: Path,
-                  output_root: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
+                  output_root: Path, config: dict[str, Any] | None = None,
+                  *, keep_staged: bool = False) -> dict[str, Any]:
     """Stage one committed shard, emit lossless RGB tiles and publish verified outputs."""
     config_value = _validated_config(config)
+    if not isinstance(keep_staged, bool):
+        raise TypeError("keep_staged must be a bool.")
     if not isinstance(shard_id, str) or not _IMAGE_ID.fullmatch(shard_id) or shard_id in {".", ".."}:
         raise ValueError(f"Unsafe shard ID: {shard_id!r}")
     release_root = Path(release_root)
@@ -453,23 +497,39 @@ def process_shard(release_root: Path, shard_id: str, work_root: Path,
     work_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
 
-    # The storage layer verifies the archive and safe extraction before we inspect fields.
-    stage_root, manifest = stage_shard(release_root, shard_id, work_root)
-    if not isinstance(manifest, dict):
-        raise ValueError("stage_shard returned an invalid manifest.")
+    # Resolve the committed metadata first so verified output reuse never reads the raw TAR.
+    manifest = load_shard_manifest(release_root, shard_id)
     catalog_id = manifest.get("catalog_id")
     if not isinstance(catalog_id, str) or not re.fullmatch(r"[0-9a-f]{64}", catalog_id):
         raise ValueError("Shard manifest has an invalid catalog ID.")
-    config_id = fingerprint(config_value)
+    config_id = fingerprint({"processing_version": PROCESSING_VERSION, "config": config_value})
     processing_id = fingerprint({"catalog_id": catalog_id, "shard_id": shard_id,
                                  "config_id": config_id})
     final_directory = output_root / shard_id / processing_id
     if final_directory.exists() or final_directory.is_symlink():
         if not final_directory.is_dir():
             raise ValueError(f"Processing destination is not a directory: {final_directory}")
-        return dict(_verify_output(final_directory, processing_id, config_id, catalog_id),
-                    reused=True, output_path=str(final_directory))
+        result = _verify_output(final_directory, processing_id, config_id, catalog_id)
+        staged_path = _stage_cache_path(work_root, catalog_id, shard_id)
+        if keep_staged:
+            if staged_path.exists() or staged_path.is_symlink():
+                _validate_owned_stage_path(staged_path, work_root, catalog_id, shard_id)
+                if not staged_path.is_dir():
+                    raise ValueError(f"Staged cache path is not a directory: {staged_path}")
+                retained_stage = str(staged_path)
+            else:
+                retained_stage = None
+        else:
+            _cleanup_stage_cache(work_root, catalog_id, shard_id)
+            retained_stage = None
+        return dict(result, reused=True, output_path=str(final_directory),
+                    staged_path=retained_stage)
 
+    # Stage the source archive only for a new processing fingerprint.
+    stage_root, staged_manifest = stage_shard(release_root, shard_id, work_root)
+    if not isinstance(staged_manifest, dict) or fingerprint(staged_manifest) != fingerprint(manifest):
+        raise ValueError("Staged shard manifest differs from validated release metadata.")
+    _validate_owned_stage_path(stage_root, work_root, catalog_id, shard_id)
     release_descriptor = _read_release_descriptor(release_root)
     catalog = release_descriptor.get("catalog")
     if not isinstance(catalog, dict) or catalog.get("catalog_id") != catalog_id:
@@ -504,6 +564,7 @@ def process_shard(release_root: Path, shard_id: str, work_root: Path,
         _verify_staged_files(publish, checksums, stats, config_value)
         commit = {
             "schema_version": 1,
+            "processing_version": PROCESSING_VERSION,
             "complete": True,
             "training_ready": training_ready,
             "review_required": stats["images_review"] > 0 or stats["tiles_written"] == 0,
@@ -519,12 +580,46 @@ def process_shard(release_root: Path, shard_id: str, work_root: Path,
         }
         atomic_json(publish / "commit.json", commit)
         os.replace(publish, final_directory)
-        return dict(_verify_output(final_directory, processing_id, config_id, catalog_id),
-                    reused=False, output_path=str(final_directory))
+        result = _verify_output(final_directory, processing_id, config_id, catalog_id)
+        if keep_staged:
+            retained_stage = str(stage_root)
+        else:
+            _cleanup_stage_cache(work_root, catalog_id, shard_id, stage_root)
+            retained_stage = None
+        return dict(result, reused=False, output_path=str(final_directory),
+                    staged_path=retained_stage)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
         if publish.exists():
             shutil.rmtree(publish, ignore_errors=True)
+
+
+def _stage_cache_path(work_root: Path, catalog_id: str, shard_id: str) -> Path:
+    return Path(work_root) / "staged" / catalog_id / shard_id
+
+
+def _validate_owned_stage_path(stage_path: Path, work_root: Path,
+                               catalog_id: str, shard_id: str) -> None:
+    work_root_resolved = Path(work_root).resolve()
+    expected_path = _stage_cache_path(work_root_resolved, catalog_id, shard_id)
+    path = Path(stage_path)
+    if any(item.is_symlink() for item in (expected_path.parent.parent, expected_path.parent, expected_path)):
+        raise ValueError("Staged cache path cannot include symbolic links.")
+    resolved = path.resolve()
+    if not resolved.is_relative_to(work_root_resolved) or resolved != expected_path.resolve():
+        raise ValueError("stage_shard returned a path outside its owned work cache.")
+
+
+def _cleanup_stage_cache(work_root: Path, catalog_id: str, shard_id: str,
+                         stage_path: Path | None = None) -> None:
+    expected = _stage_cache_path(work_root, catalog_id, shard_id)
+    path = expected if stage_path is None else Path(stage_path)
+    _validate_owned_stage_path(path, work_root, catalog_id, shard_id)
+    if not path.exists():
+        return
+    if not path.is_dir():
+        raise ValueError(f"Staged cache path is not a directory: {path}")
+    shutil.rmtree(path)
 
 
 def _read_release_descriptor(release_root: Path) -> dict[str, Any]:
@@ -567,5 +662,6 @@ def _verify_staged_files(directory: Path, checksums: dict[str, str],
     except (tarfile.TarError, OSError) as exc:
         raise ValueError("Generated patch archive failed verification.") from exc
     expected_members = {f"patches/{row['tile_id']}.png" for row in tiles}
-    if member_count != len(tiles) or member_names != expected_members:
+    if (member_count != len(tiles) or member_names != expected_members
+            or any(row.get("patch_member") != f"patches/{row['tile_id']}.png" for row in tiles)):
         raise ValueError("Generated patch members do not match tile metadata.")
