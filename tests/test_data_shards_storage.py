@@ -15,7 +15,7 @@ from PIL import Image
 
 from histology_data.catalog import build_catalog
 from histology_data.io import file_hash
-from histology_data.shards import pack_catalog, stage_shard, verify_release
+from histology_data.shards import load_shard_manifest, pack_catalog, stage_shard, verify_release
 
 
 def _png(index: int, width: int = 32, height: int = 32) -> bytes:
@@ -67,6 +67,31 @@ def _make_catalog(tmp_path: Path, count: int = 4, layout: str = "mixed") -> dict
         writer.writeheader()
         writer.writerows(rows)
     return build_catalog(metadata, sources, lenses=[4])
+
+
+def _make_tiff_catalog(tmp_path: Path, count: int = 6) -> dict:
+    source = tmp_path / "tiff-fields"
+    source.mkdir()
+    rows = []
+    for index in range(count):
+        name = f"tiff_{index}.tiff"
+        pixels = random.Random(index).randbytes(32 * 32 * 3)
+        Image.frombytes("RGB", (32, 32), pixels).save(source / name, format="TIFF")
+        rows.append({
+            "Ten_File": name,
+            "Ma_Nam": "2024",
+            "Ma_So": str(index + 1),
+            "Do_Phong_Dai": "4X",
+            "Glade": "unreviewed text",
+            "Ket_Luan": "CARCINOMA" if index % 2 == 0 else "PROSTATE HYPERPLASIA",
+            "Ten_Slide": f"slide-{index}",
+        })
+    metadata = tmp_path / "tiff-metadata.csv"
+    with metadata.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return build_catalog(metadata, [source], lenses=[4])
 
 
 def _read_manifest(release_root: Path, entry: dict) -> dict:
@@ -260,3 +285,123 @@ def test_staging_checks_available_disk_space(tmp_path: Path, monkeypatch: pytest
 
     with pytest.raises(OSError, match="Insufficient free space"):
         stage_shard(release_root, "shard-000001", tmp_path / "no-space")
+
+
+def test_stage_valid_shard_ignores_unrelated_corruption_and_reads_only_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import histology_data.shards as storage
+
+    catalog = _make_tiff_catalog(tmp_path, count=6)
+    release_root = tmp_path / "tiff-release"
+    descriptor = pack_catalog(catalog, release_root, max_bytes=10_240)
+    assert len(descriptor["shards"]) == 3
+    unrelated_tar = release_root / "shard-000003.tar"
+    unrelated_tar.write_bytes(unrelated_tar.read_bytes()[:-1] + b"X")
+
+    hashed_tars: list[str] = []
+    opened_tars: list[str] = []
+    real_file_hash = storage.file_hash
+    real_tar_open = storage.tarfile.open
+
+    def track_file_hash(path: Path) -> str:
+        if Path(path).suffix == ".tar":
+            hashed_tars.append(Path(path).name)
+        return real_file_hash(path)
+
+    def track_tar_open(*args: object, **kwargs: object) -> tarfile.TarFile:
+        path = args[0] if args else kwargs.get("name")
+        if path is not None and Path(path).suffix == ".tar":
+            opened_tars.append(Path(path).name)
+        return real_tar_open(*args, **kwargs)
+
+    monkeypatch.setattr(storage, "file_hash", track_file_hash)
+    monkeypatch.setattr(storage.tarfile, "open", track_tar_open)
+
+    stage_root, manifest = stage_shard(release_root, "shard-000001", tmp_path / "work")
+
+    assert stage_root.is_dir()
+    assert manifest["shard_id"] == "shard-000001"
+    assert hashed_tars == ["shard-000001.tar"]
+    assert opened_tars == ["shard-000001.tar"]
+    with pytest.raises(ValueError, match="shard-000003.tar"):
+        verify_release(release_root)
+
+
+def test_stage_rejects_corruption_in_the_requested_shard(tmp_path: Path) -> None:
+    catalog = _make_catalog(tmp_path, count=1, layout="directory")
+    release_root = tmp_path / "release"
+    descriptor = pack_catalog(catalog, release_root, max_bytes=40_960)
+    tar_path = release_root / descriptor["shards"][0]["tar_name"]
+    tar_path.write_bytes(tar_path.read_bytes()[:-1] + b"X")
+
+    with pytest.raises(ValueError, match="checksum or size mismatch"):
+        stage_shard(release_root, "shard-000001", tmp_path / "work")
+
+
+def test_manifest_loader_validates_release_without_reading_raw_tars(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import histology_data.shards as storage
+
+    catalog = _make_tiff_catalog(tmp_path, count=6)
+    release_root = tmp_path / "release"
+    descriptor = pack_catalog(catalog, release_root, max_bytes=10_240)
+    assert len(descriptor["shards"]) == 3
+    hashed_tars: list[str] = []
+    real_file_hash = storage.file_hash
+
+    def track_file_hash(path: Path) -> str:
+        if Path(path).suffix == ".tar":
+            hashed_tars.append(Path(path).name)
+        return real_file_hash(path)
+
+    monkeypatch.setattr(storage, "file_hash", track_file_hash)
+    monkeypatch.setattr(storage.tarfile, "open", lambda *args, **kwargs: pytest.fail("loader read a TAR"))
+
+    manifest = load_shard_manifest(release_root, "shard-000002")
+
+    assert manifest["shard_id"] == "shard-000002"
+    assert manifest["images"]
+    assert hashed_tars == []
+
+
+def test_stage_rejects_malformed_global_release_metadata_before_tar_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import histology_data.shards as storage
+
+    catalog = _make_catalog(tmp_path, count=1, layout="directory")
+    release_root = tmp_path / "release"
+    descriptor = pack_catalog(catalog, release_root, max_bytes=40_960)
+    descriptor["complete"] = False
+    (release_root / "release.json").write_text(json.dumps(descriptor), encoding="utf-8")
+    monkeypatch.setattr(storage.tarfile, "open", lambda *args, **kwargs: pytest.fail("stage read a TAR"))
+
+    with pytest.raises(ValueError, match="complete flag"):
+        stage_shard(release_root, "shard-000001", tmp_path / "work")
+
+
+def test_staged_cache_is_isolated_by_catalog_id(tmp_path: Path) -> None:
+    first_dir = tmp_path / "first-catalog"
+    second_dir = tmp_path / "second-catalog"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_catalog = _make_catalog(first_dir, count=1, layout="directory")
+    second_catalog = _make_catalog(second_dir, count=1, layout="directory")
+    second_source = Path(second_catalog["sources"][0]["path"])
+    (second_source / second_catalog["images"][0]["source_member"]).write_bytes(_png(71))
+    second_catalog = build_catalog(second_dir / "metadata.csv", [second_source], lenses=[4])
+    assert first_catalog["catalog_id"] != second_catalog["catalog_id"]
+    first_release = tmp_path / "first-release"
+    second_release = tmp_path / "second-release"
+    pack_catalog(first_catalog, first_release, max_bytes=40_960)
+    pack_catalog(second_catalog, second_release, max_bytes=40_960)
+    work_root = tmp_path / "shared-work"
+
+    first_stage, _ = stage_shard(first_release, "shard-000001", work_root)
+    second_stage, _ = stage_shard(second_release, "shard-000001", work_root)
+
+    assert first_stage != second_stage
+    assert first_stage.joinpath("images", "field_0.png").read_bytes() == _png(0)
+    assert second_stage.joinpath("images", "field_0.png").read_bytes() == _png(71)

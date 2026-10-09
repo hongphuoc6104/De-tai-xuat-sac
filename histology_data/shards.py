@@ -219,14 +219,11 @@ def _read_archive_member(stream: BinaryIO, expected_size: int) -> str:
     return digest.hexdigest()
 
 
-def _verify_tar(tar_path: Path, manifest: dict[str, Any], catalog: dict[str, Any], max_bytes: int) -> None:
-    _safe_regular_file(tar_path, "TAR archive")
+def _manifest_records(manifest: dict[str, Any], catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Validate one manifest's full catalog provenance and return its member map."""
     records = manifest.get("images")
     if not isinstance(records, list) or not records:
-        raise ValueError(f"Shard manifest has no images: {tar_path.name}")
-    if tar_path.stat().st_size > max_bytes:
-        raise ValueError(f"Shard exceeds release size limit: {tar_path.name}")
-
+        raise ValueError(f"Shard manifest has no images: {manifest.get('shard_id', '<unknown>')}")
     catalog_by_id = {image["image_id"]: image for image in catalog["images"]}
     expected: dict[str, dict[str, Any]] = {}
     for record in records:
@@ -240,13 +237,24 @@ def _verify_tar(tar_path: Path, manifest: dict[str, Any], catalog: dict[str, Any
         expected_member = _output_member(catalog_image)
         if member != expected_member or member in expected:
             raise ValueError(f"Unexpected or duplicate TAR member in manifest: {member!r}")
+        safe_member(member)
+        if set(record) != {*catalog_image, "member", "sha256"}:
+            raise ValueError(f"Shard image record has unexpected fields: {image_id}")
         if any(record.get(key) != value for key, value in catalog_image.items()):
             raise ValueError(f"Shard image provenance differs from catalog: {image_id}")
         digest = record.get("sha256")
         if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
             raise ValueError(f"Invalid image SHA-256 in manifest: {image_id}")
         expected[member] = record
+    return expected
 
+
+def _verify_tar(tar_path: Path, manifest: dict[str, Any], catalog: dict[str, Any], max_bytes: int) -> None:
+    _safe_regular_file(tar_path, "TAR archive")
+    records = manifest.get("images")
+    if tar_path.stat().st_size > max_bytes:
+        raise ValueError(f"Shard exceeds release size limit: {tar_path.name}")
+    expected = _manifest_records(manifest, catalog)
     if _archive_size(records) != tar_path.stat().st_size:
         raise ValueError(f"TAR archive size is not canonical for its manifest: {tar_path.name}")
     found: set[str] = set()
@@ -276,7 +284,10 @@ def _verify_tar(tar_path: Path, manifest: dict[str, Any], catalog: dict[str, Any
         raise ValueError(f"TAR archive is missing manifest members: {tar_path.name}")
 
 
-def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+def _load_release_metadata(
+    release_root: Path,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
+    """Validate release/catalog/manifests without reading any TAR archive bytes."""
     root = Path(release_root)
     descriptor_path = root / "release.json"
     _safe_regular_file(descriptor_path, "release descriptor")
@@ -298,6 +309,7 @@ def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[
     all_images = {image["image_id"] for image in catalog["images"]}
     covered: list[str] = []
     manifests: dict[str, dict[str, Any]] = {}
+    entries: dict[str, dict[str, Any]] = {}
     seen_shards: set[str] = set()
     for index, entry in enumerate(shards, 1):
         if not isinstance(entry, dict):
@@ -321,9 +333,17 @@ def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[
             raise ValueError(f"Shard manifest identity mismatch: {manifest_name}")
         if manifest.get("tar_sha256") != entry.get("tar_sha256"):
             raise ValueError(f"Shard TAR checksum differs from descriptor: {tar_name}")
+        tar_digest = entry.get("tar_sha256")
+        if not isinstance(tar_digest, str) or not _SHA256.fullmatch(tar_digest):
+            raise ValueError(f"Invalid TAR checksum: {tar_name}")
         records = manifest.get("images")
         if not isinstance(records, list) or entry.get("image_count") != len(records):
             raise ValueError(f"Shard image count differs from descriptor: {manifest_name}")
+        _manifest_records(manifest, catalog)
+        size_bytes = entry.get("size_bytes")
+        if (not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 1
+                or size_bytes > max_bytes or _archive_size(records) != size_bytes):
+            raise ValueError(f"Shard size metadata is invalid: {tar_name}")
         for record in records:
             if not isinstance(record, dict) or not isinstance(record.get("image_id"), str):
                 raise ValueError("Malformed image record in shard manifest.")
@@ -334,15 +354,8 @@ def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[
                 raise ValueError("An image appears in multiple committed shards.")
             seen_shards.add(image_id)
             covered.append(image_id)
-        tar_path = root / tar_name
-        _safe_regular_file(tar_path, "TAR archive")
-        tar_digest = entry.get("tar_sha256")
-        if not isinstance(tar_digest, str) or not _SHA256.fullmatch(tar_digest):
-            raise ValueError(f"Invalid TAR checksum: {tar_name}")
-        if tar_path.stat().st_size != entry.get("size_bytes") or file_hash(tar_path) != tar_digest:
-            raise ValueError(f"Shard TAR checksum or size mismatch: {tar_name}")
-        _verify_tar(tar_path, manifest, catalog, max_bytes)
         manifests[shard_id] = manifest
+        entries[shard_id] = entry
 
     image_order = [image["image_id"] for image in catalog["images"]]
     if covered != image_order[:len(covered)]:
@@ -350,6 +363,28 @@ def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[
     complete = len(covered) == len(image_order)
     if descriptor.get("complete") is not complete:
         raise ValueError("Release complete flag does not match committed image coverage.")
+    return descriptor, manifests, entries, catalog
+
+
+def _verify_shard_archive(root: Path, entry: dict[str, Any], manifest: dict[str, Any],
+                          catalog: dict[str, Any], max_bytes: int) -> None:
+    tar_path = _verify_shard_checksum(root, entry, manifest)
+    _verify_tar(tar_path, manifest, catalog, max_bytes)
+
+
+def _verify_shard_checksum(root: Path, entry: dict[str, Any], manifest: dict[str, Any]) -> Path:
+    tar_path = root / manifest["tar_name"]
+    _safe_regular_file(tar_path, "TAR archive")
+    if tar_path.stat().st_size != entry["size_bytes"] or file_hash(tar_path) != entry["tar_sha256"]:
+        raise ValueError(f"Shard TAR checksum or size mismatch: {tar_path.name}")
+    return tar_path
+
+
+def _verify_release(release_root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    root = Path(release_root)
+    descriptor, manifests, entries, catalog = _load_release_metadata(root)
+    for shard_id, manifest in manifests.items():
+        _verify_shard_archive(root, entries[shard_id], manifest, catalog, descriptor["max_bytes"])
     return descriptor, manifests
 
 
@@ -357,6 +392,14 @@ def verify_release(release_root: Path) -> dict[str, Any]:
     """Verify release metadata, shard archives, and every stored image digest."""
     descriptor, _ = _verify_release(Path(release_root))
     return descriptor
+
+
+def load_shard_manifest(release_root: Path, shard_id: str) -> dict[str, Any]:
+    """Validate release/catalog/manifests and return one manifest without reading TARs."""
+    _, manifests, _, _ = _load_release_metadata(Path(release_root))
+    if shard_id not in manifests:
+        raise ValueError(f"Shard is not committed in this release: {shard_id}")
+    return manifests[shard_id]
 
 
 def _plan_shards(images: list[dict[str, Any]], max_bytes: int) -> list[list[dict[str, Any]]]:
@@ -528,13 +571,15 @@ def _verify_staged(stage_root: Path, manifest: dict[str, Any]) -> None:
 def stage_shard(release_root: Path, shard_id: str,
                 work_root: Path) -> tuple[Path, dict]:
     """Verify and safely extract one committed shard into a reusable work directory."""
-    descriptor, manifests = _verify_release(Path(release_root))
+    root = Path(release_root)
+    descriptor, manifests, entries, _ = _load_release_metadata(root)
     if shard_id not in manifests:
         raise ValueError(f"Shard is not committed in this release: {shard_id}")
     manifest = manifests[shard_id]
+    tar_path = _verify_shard_checksum(root, entries[shard_id], manifest)
     work = Path(work_root)
     work.mkdir(parents=True, exist_ok=True)
-    staging_parent = work / "staged"
+    staging_parent = work / "staged" / descriptor["catalog_id"]
     staging_parent.mkdir(parents=True, exist_ok=True)
     stage_root = staging_parent / shard_id
     if stage_root.is_symlink():
@@ -550,13 +595,14 @@ def stage_shard(release_root: Path, shard_id: str,
     temp_root = staging_parent / f".{shard_id}.{uuid.uuid4().hex}.tmp"
     temp_root.mkdir()
     try:
-        tar_path = Path(release_root) / manifest["tar_name"]
         expected = {record["member"]: record for record in manifest["images"]}
+        found: set[str] = set()
         with tarfile.open(tar_path, mode="r:") as archive:
             for item in archive:
                 member = safe_member(item.name)
-                if member not in expected or not item.isreg():
+                if member not in expected or member in found or not item.isreg():
                     raise ValueError(f"Unsafe TAR member during staging: {member}")
+                found.add(member)
                 record = expected[member]
                 if item.size != record["byte_size"]:
                     raise ValueError(f"TAR member size mismatch during staging: {member}")
@@ -581,6 +627,8 @@ def stage_shard(release_root: Path, shard_id: str,
                 if count != record["byte_size"] or digest.hexdigest() != record["sha256"]:
                     raise ValueError(f"TAR member checksum mismatch during staging: {member}")
 
+        if found != set(expected):
+            raise ValueError("TAR archive is missing manifest members during staging.")
         actual_members = {path.relative_to(temp_root).as_posix() for path in temp_root.rglob("*") if path.is_file()}
         if actual_members != set(expected):
             raise ValueError("Staged TAR contents do not match the shard manifest.")
