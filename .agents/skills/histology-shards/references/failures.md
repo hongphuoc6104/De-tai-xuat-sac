@@ -56,3 +56,11 @@
 - **Giả định sai (Wrong Assumptions):** Cell compile được đồng nghĩa notebook qua static checks của dự án.
 - **Giải pháp & Kiểm chứng (Resolution & Proof):** Sắp import và khoảng trắng theo Ruff trên chính notebook; chạy lại `ruff check .` và toàn bộ conveyor station 2 sau sửa.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Kiểm tra phạm vi lint thực của dự án, gồm notebook; parse/compile là một lớp kiểm chứng riêng.
+
+### [ERR-20261009-10] Saturation mask nhận nền xám ám màu là mô
+- **Triệu chứng (Symptom):** Preview thật giữ patch nền 4×; ảnh nền thuần RGB(140,150,135) tạo bốn tissue tiles và không báo review.
+- **Tái hiện E2E (Reproduction Path):** TIFF/PNG nền 64×64 → build_catalog → pack_catalog → process_shard(tile_size=32,stride=32,min_tissue=0.2); trước sửa tiles_written=4. Thêm ảnh nền cùng ROI tím để chứng minh cả giữ mô lẫn loại nền; regression trong tests/test_data_shards_processing.py.
+- **Nguyên nhân cốt lõi (Root Cause):** Saturation >20 và độ sáng thấp được coi là mô, bỏ qua ánh sáng/nền kính hiển vi và đặc điểm stain.
+- **Giả định sai (Wrong Assumptions):** Nền luôn trắng/trung tính; pass test chức năng là đủ cho QC ngữ nghĩa.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Bounded background sampling, background-normalized OD và H&E green-absorbance contrast; thresholds/config/version lưu rõ, raw patch pixels giữ nguyên. cpu-tiles-v3 làm cache cũ không bị reuse. 19 processing tests pass; nền không tạo tile, ROI tím đúng tọa độ và đúng pixels.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Xem preview thật trước modeling; calibrate/review mask theo stain và môi trường chụp, không báo threshold heuristic là chuẩn lâm sàng.

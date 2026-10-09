@@ -207,3 +207,29 @@ def test_prepare_rejects_non_boolean_labels_reviewed_config(
     assert failed.returncode != 0
     assert "prepare.labels_reviewed must be a JSON boolean" in failed.stderr
     assert "Traceback" not in failed.stderr
+
+
+def test_process_exposes_tissue_thresholds_and_rejects_unknown_keys(
+    tmp_path: Path,
+    synthetic_sources: tuple[Path, Path, Path],
+) -> None:
+    """A configured stain threshold changes real emitted tiles through the CLI."""
+    metadata, source, _archive = synthetic_sources
+    release = tmp_path / "raw"
+    prepared = _run_cli("prepare", "--metadata", metadata, "--source", source,
+                        "--release", release, "--lenses", "4", "--per-lens", "1", "--max-mib", "1")
+    assert prepared.returncode == 0, prepared.stderr
+    config = tmp_path / "thresholds.json"
+    config.write_text(json.dumps({"process": {"tissue_green_contrast_threshold": 5.0}}))
+    output = tmp_path / "processed"
+    processed = _run_cli("process", "--release", release, "--work-root", tmp_path / "work",
+                         "--output", output, "--config", config)
+    assert processed.returncode == 0, processed.stderr
+    commit = json.loads(next(output.glob("shard-*/*/commit.json")).read_text())
+    assert commit["config"]["tissue_green_contrast_threshold"] == 5.0
+    assert commit["tiles_written"] == 0 and commit["review_required"]
+    config.write_text(json.dumps({"process": {"tissue_threshold_typo": 0.2}}))
+    invalid = _run_cli("process", "--release", release, "--work-root", tmp_path / "work",
+                       "--output", output, "--config", config)
+    assert invalid.returncode != 0
+    assert "Unknown process configuration" in invalid.stderr

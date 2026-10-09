@@ -17,6 +17,11 @@ PROCESSING_KEYS = (
     "min_tissue",
     "max_tiles_per_image",
     "blur_threshold",
+    "tissue_method",
+    "tissue_od_mean_threshold",
+    "tissue_green_contrast_threshold",
+    "background_neutral_chroma_threshold",
+    "background_reference_percentile",
 )
 
 
@@ -57,6 +62,11 @@ def _parser() -> argparse.ArgumentParser:
     process.add_argument("--min-tissue", type=float)
     process.add_argument("--max-tiles-per-image", type=int)
     process.add_argument("--blur-threshold", type=float)
+    process.add_argument("--tissue-method")
+    process.add_argument("--tissue-od-mean-threshold", type=float)
+    process.add_argument("--tissue-green-contrast-threshold", type=float)
+    process.add_argument("--background-neutral-chroma-threshold", type=float)
+    process.add_argument("--background-reference-percentile", type=float)
 
     verify = commands.add_parser("verify", help="verify a raw shard release and its contents")
     verify.add_argument("--release", required=True, type=Path)
@@ -174,20 +184,17 @@ def _read_release_shards(release_root: Path) -> tuple[bool, list[str]]:
 
 
 def _process(args: argparse.Namespace) -> int:
-    from .processing import process_shard
+    from .processing import DEFAULT_CONFIG, process_shard
 
     config = _load_config(args.config, "process")
+    unknown = set(config) - set(PROCESSING_KEYS) - {"max_shards"}
+    if unknown:
+        raise ValueError(f"Unknown process configuration fields: {sorted(unknown)}")
     max_shards = _optional_integer(_configured(args.max_shards, config, "max_shards", None), "--max-shards")
     process_config: dict[str, Any] = {}
-    defaults: dict[str, Any] = {
-        "tile_size": 256,
-        "stride": 256,
-        "min_tissue": 0.2,
-        "max_tiles_per_image": 0,
-        "blur_threshold": 0,
-    }
+    defaults = DEFAULT_CONFIG
     for key in PROCESSING_KEYS:
-        value = _configured(getattr(args, key), config, key, defaults[key])
+        value = _configured(getattr(args, key, None), config, key, defaults[key])
         if value is not None:
             process_config[key] = value
     process_config["tile_size"] = _optional_integer(process_config["tile_size"], "--tile-size")

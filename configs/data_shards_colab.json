@@ -1,6 +1,10 @@
 {
   "prepare": {
-    "lenses": [4, 10, 40],
+    "lenses": [
+      4,
+      10,
+      40
+    ],
     "per_lens": null,
     "max_mib": 512,
     "max_shards": null,
@@ -12,6 +16,11 @@
     "stride": 256,
     "min_tissue": 0.2,
     "max_tiles_per_image": 0,
-    "blur_threshold": 0
+    "blur_threshold": 0,
+    "tissue_method": "normalized_od_he_contrast_v1",
+    "tissue_od_mean_threshold": 0.05,
+    "tissue_green_contrast_threshold": 0.03,
+    "background_neutral_chroma_threshold": 0.2,
+    "background_reference_percentile": 99.0
   }
 }
