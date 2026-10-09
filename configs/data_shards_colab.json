@@ -1,0 +1,17 @@
+{
+  "prepare": {
+    "lenses": [4, 10, 40],
+    "per_lens": null,
+    "max_mib": 512,
+    "max_shards": null,
+    "labels_reviewed": false
+  },
+  "process": {
+    "max_shards": null,
+    "tile_size": 256,
+    "stride": 256,
+    "min_tissue": 0.2,
+    "max_tiles_per_image": 0,
+    "blur_threshold": 0
+  }
+}
