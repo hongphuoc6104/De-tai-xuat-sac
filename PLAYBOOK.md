@@ -72,5 +72,6 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - [ERR-20261009-08] Raw duplicate leakage và typed review: xem histology-shards/references/failures.md.
 - [ERR-20261009-09] Notebook import order bị bỏ sót ở lint riêng: xem histology-shards/references/failures.md.
 - [ERR-20261009-10] Nền ám màu bị giữ như mô: xem histology-shards/references/failures.md.
+- [ERR-20261009-11] Local pytest wrapper che lỗi import CI: xem histology-shards/references/failures.md.
 
 Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).

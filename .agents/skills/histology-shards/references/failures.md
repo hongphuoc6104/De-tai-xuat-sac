@@ -64,3 +64,11 @@
 - **Giả định sai (Wrong Assumptions):** Nền luôn trắng/trung tính; pass test chức năng là đủ cho QC ngữ nghĩa.
 - **Giải pháp & Kiểm chứng (Resolution & Proof):** Bounded background sampling, background-normalized OD và H&E green-absorbance contrast; thresholds/config/version lưu rõ, raw patch pixels giữ nguyên. cpu-tiles-v3 làm cache cũ không bị reuse. 19 processing tests pass; nền không tạo tile, ROI tím đúng tọa độ và đúng pixels.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Xem preview thật trước modeling; calibrate/review mask theo stain và môi trường chụp, không báo threshold heuristic là chuẩn lâm sàng.
+
+### [ERR-20261009-11] CI không import được package do local pytest wrapper
+- **Triệu chứng (Symptom):** Local qua test nhưng GitHub runner fail collection với ModuleNotFoundError histology_data.
+- **Tái hiện E2E (Reproduction Path):** GitHub run 37912971352; local `env -u PYTHONPATH python3 -P -m pytest -q tests/test_data_catalog.py` tái hiện đúng lỗi import trước sửa.
+- **Nguyên nhân cốt lõi (Root Cause):** Local pytest là wrapper gọi python -m pytest và được thêm cwd; console script trong runner sạch không có source root.
+- **Giả định sai (Wrong Assumptions):** Hai lệnh có tên pytest cùng nạp sys.path như nhau; môi trường dev đủ đại diện CI.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Khai báo source-tree pythonpath trong pytest config; workflow gọi python -m pytest. E2E regression tắt PYTHONPATH/CWD injection và chỉ chạy child suite catalog, tránh đệ quy runner.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Kiểm thử import trên môi trường sạch và chuẩn hóa entry point; không chèn sys.path riêng lẻ để che lỗi kiến trúc.

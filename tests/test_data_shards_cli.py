@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -233,3 +234,13 @@ def test_process_exposes_tissue_thresholds_and_rejects_unknown_keys(
                        "--output", output, "--config", config)
     assert invalid.returncode != 0
     assert "Unknown process configuration" in invalid.stderr
+
+
+def test_clean_pytest_entrypoint_collects_project_package() -> None:
+    """Run a child-only suite with CWD import injection and PYTHONPATH disabled."""
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run([sys.executable, "-P", "-m", "pytest", "-q", "tests/test_data_catalog.py"],
+                            cwd=PROJECT_ROOT, env=environment, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "passed" in result.stdout
