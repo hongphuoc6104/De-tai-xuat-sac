@@ -67,3 +67,11 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - **Giả định sai (Wrong Assumptions):** Giả định giới hạn sau inventory cũng giới hạn I/O; round-robin theo ca được coi là cân bằng giữa lớp.
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Inventory chỉ liệt kê path/size, hash sau khi chọn; xen kẽ lớp và ca. Cả tám kiểm thử catalog pass, chỉ hai TIFF được hash và nhãn `{0,1}` có mặt. Smoke luôn `training_ready=false` dù có identity map và nhãn đã review.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Áp dụng giới hạn kỹ thuật trước đọc/decode/hash ảnh; smoke phải đo coverage của ca/lớp và không được báo là release khoa học đầy đủ.
+
+### [ERR-20261009-04] Colab Adapter Rejected Mixed Directory and ZIP Sources
+- **Triệu chứng (Symptom):** Notebook stopped when a 4X source directory and 10X/40X ZIP archives were both configured, although the CLI and catalog support multiple source paths.
+- **Tái hiện E2E (Reproduction Path):** Execute the marked source-selection block in `notebooks/Colab_Data_Shards.ipynb` against temporary 4X directory plus 10X and 40X ZIP fixtures. Before the fix, it raised `Choose a source directory or source ZIPs for this run; do not mix both.` The regression path is `pytest -q tests/test_data_shards_notebook.py`.
+- **Nguyên nhân cốt lõi (Root Cause):** The notebook adapter imposed a single-source-format rule that did not exist in the CLI or catalog contracts.
+- **Giả định sai (Wrong Assumptions):** All magnifications would be stored using the same source packaging format.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** The adapter now appends an optional directory and all sorted ZIP archives, then passes them together to catalog preparation. A notebook-source E2E test confirms mixed inputs work and that duplicate basenames are still rejected by the catalog.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Keep notebook source selection aligned with the CLI's repeated `--source` contract; let the catalog enforce cross-source filename integrity.

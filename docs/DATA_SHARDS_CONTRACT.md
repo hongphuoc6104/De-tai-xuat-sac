@@ -14,10 +14,10 @@ Storage API to implement in `histology_data/shards.py`:
 
 Processing API to implement in `histology_data/processing.py`:
 
-- `process_shard(release_root: Path, shard_id: str, work_root: Path, output_root: Path, config: dict | None = None) -> dict`.
+- `process_shard(release_root: Path, shard_id: str, work_root: Path, output_root: Path, config: dict | None = None, *, keep_staged: bool = False) -> dict`. `keep_staged` is a runtime-only retention option, excluded from processing fingerprints. Fresh successful runs remove the verified staged source cache by default; verified output reuse does not read the raw TAR, and default reuse removes any cached stage. The result reports transient `reused`, `output_path`, and `staged_path` values.
 - Config defaults: `tile_size=256`, `stride=256`, `min_tissue=0.2`, `max_tiles_per_image=0` (all), `blur_threshold=0` (score/review only). Capped extraction is smoke and never becomes training-ready.
 - Output per shard: lossless `patches.tar`, `tiles.jsonl`, `qc.jsonl`, optional preview images, final `commit.json` with catalog/config IDs, file checksums, counts, complete status. Verified on resume, corrupted output fails without silent success. Use SSD work-root then verified publication output-root (may be Drive).
-- Coordinate origin: upper-left, x/y/w/h in original image pixels; include valid_w/valid_h for white padding at borders. `tile_id` hashes raw image SHA + coordinate + processing config. Same inputs produce same IDs across shards/profile paths. Tile rows reference case/bag provenance but must not propagate case cancer label into supervised patch target.
+- Coordinate origin: upper-left, x/y/w/h in original image pixels; include valid_w/valid_h for white padding at borders. `tile_id` hashes canonical `image_id`, raw image SHA, coordinates, and versioned processing config. Same catalog image and settings produce the same instance ID across shards/profile paths. `content_tile_id` hashes raw image SHA, coordinates, and versioned processing config without source identity; matching content keys flag exact duplicate content for review. Tile rows reference case/bag provenance but must not propagate case cancer label into supervised patch target.
 - Fully decode one field at a time; bounded patch buffer, no entire-cohort pixel load. Per-image QC records decode/geometry/mode/lens/tissue/focus and reason. Empty/no-tissue fields explicitly logged for review. Fail closed for corrupt source/output; no empty success commits.
 
 CLI to implement in `histology_data/__main__.py`:

@@ -47,6 +47,11 @@ def _parser() -> argparse.ArgumentParser:
     process.add_argument("--config", type=Path, help="JSON config with a process section")
     process.add_argument("--shard", help="process one committed shard ID")
     process.add_argument("--max-shards", type=int, help="limit newly processed shards in this invocation")
+    process.add_argument(
+        "--keep-work",
+        action="store_true",
+        help="retain the verified staged source shard on the work disk after processing",
+    )
     process.add_argument("--tile-size", type=int)
     process.add_argument("--stride", type=int)
     process.add_argument("--min-tissue", type=float)
@@ -102,7 +107,10 @@ def _prepare(args: argparse.Namespace) -> int:
     per_lens = _optional_integer(_configured(args.per_lens, config, "per_lens", None), "--per-lens")
     lenses = _configured(args.lenses, config, "lenses", None)
     identity_map = args.identity_map or (Path(config["identity_map"]) if config.get("identity_map") else None)
-    labels_reviewed = args.labels_reviewed or bool(config.get("labels_reviewed", False))
+    config_labels_reviewed = config.get("labels_reviewed", False)
+    if not isinstance(config_labels_reviewed, bool):
+        raise ValueError("prepare.labels_reviewed must be a JSON boolean.")
+    labels_reviewed = bool(args.labels_reviewed) or config_labels_reviewed
     _positive_number(max_mib, "--max-mib")
     max_bytes = int(max_mib * 1024 * 1024)
     if max_bytes < 1:
@@ -214,16 +222,20 @@ def _process(args: argparse.Namespace) -> int:
             work_root=args.work_root,
             output_root=args.output,
             config=process_config,
+            keep_staged=args.keep_work,
         )
         selected_count += 1
         output_path = result.get("output_path")
         location = f" at {output_path}" if output_path is not None else ""
+        staged_path = result.get("staged_path")
         if result.get("reused", False):
             reused_count += 1
             LOGGER.info("Verified existing processed shard %s%s.", shard_id, location)
         else:
             new_count += 1
             LOGGER.info("Committed processed shard %s%s.", shard_id, location)
+        if staged_path is not None:
+            LOGGER.info("Retained staged source shard %s at %s.", shard_id, staged_path)
         if max_shards is not None and new_count >= max_shards:
             break
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import subprocess
 import sys
 import zipfile
@@ -109,6 +110,9 @@ def test_process_resumes_verified_shard_and_advances_by_new_work(
 
     work_root = tmp_path / "ssd-work"
     output_root = tmp_path / "processed"
+    descriptor = json.loads((release / "release.json").read_text(encoding="utf-8"))
+    shard_id = descriptor["shards"][0]["shard_id"]
+    stage_cache = work_root / "staged" / descriptor["catalog_id"] / shard_id
     process_args = (
         "process",
         "--release",
@@ -131,11 +135,35 @@ def test_process_resumes_verified_shard_and_advances_by_new_work(
     first = _run_cli(*process_args)
     assert first.returncode == 0, first.stderr
     assert "1 new" in first.stderr
+    assert not stage_cache.exists()
 
     resumed = _run_cli(*process_args)
     assert resumed.returncode == 0, resumed.stderr
     assert "0 new" in resumed.stderr
     assert "verified existing" in resumed.stderr
+    assert not stage_cache.exists()
+
+    keep_args = list(process_args)
+    tile_size_index = keep_args.index("--tile-size") + 1
+    keep_args[tile_size_index] = "16"
+    keep_args.append("--keep-work")
+    kept = _run_cli(*keep_args)
+    assert kept.returncode == 0, kept.stderr
+    assert "1 new" in kept.stderr
+    assert "Retained staged source shard" in kept.stderr
+    assert stage_cache.is_dir()
+
+    output_directories = [path for path in (output_root / shard_id).iterdir() if path.is_dir()]
+    assert len(output_directories) == 2
+    kept_output = next(path for path in output_directories if str(path) in kept.stderr)
+    # Runtime-only retention must not change the output's processing fingerprint.
+    cleanup_args = [item for item in keep_args if item != "--keep-work"]
+    cleaned_reuse = _run_cli(*cleanup_args)
+    assert cleaned_reuse.returncode == 0, cleaned_reuse.stderr
+    assert "0 new" in cleaned_reuse.stderr
+    assert "Verified existing processed shard" in cleaned_reuse.stderr
+    assert str(kept_output) in cleaned_reuse.stderr
+    assert not stage_cache.exists()
 
 
 def test_cli_reports_bad_metadata_without_traceback(tmp_path: Path, synthetic_sources: tuple[Path, Path, Path]) -> None:
@@ -155,4 +183,27 @@ def test_cli_reports_bad_metadata_without_traceback(tmp_path: Path, synthetic_so
     )
     assert failed.returncode != 0
     assert "missing fields" in failed.stderr.lower()
+    assert "Traceback" not in failed.stderr
+
+
+def test_prepare_rejects_non_boolean_labels_reviewed_config(
+    tmp_path: Path,
+    synthetic_sources: tuple[Path, Path, Path],
+) -> None:
+    metadata, image_root, _source_zip = synthetic_sources
+    config = tmp_path / "invalid-config.json"
+    config.write_text('{"prepare":{"per_lens":1,"labels_reviewed":"false"}}', encoding="utf-8")
+    failed = _run_cli(
+        "prepare",
+        "--metadata",
+        metadata,
+        "--source",
+        image_root,
+        "--release",
+        tmp_path / "invalid-config-release",
+        "--config",
+        config,
+    )
+    assert failed.returncode != 0
+    assert "prepare.labels_reviewed must be a JSON boolean" in failed.stderr
     assert "Traceback" not in failed.stderr
