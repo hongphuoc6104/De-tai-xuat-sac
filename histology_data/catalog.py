@@ -63,6 +63,8 @@ def build_catalog(metadata: Path, sources: list[Path], lenses: list[int] | None 
     an explicit case-to-patient mapping and reviewed case-level binary labels.
     """
     metadata = Path(metadata)
+    if not isinstance(labels_reviewed, bool):
+        raise ValueError("labels_reviewed must be an explicit boolean.")
     raw = pd.read_csv(metadata, dtype=str, keep_default_na=False) if metadata.suffix.lower() == ".csv" else pd.read_excel(metadata, dtype=str, keep_default_na=False)
     required = {"Ten_File", "Ma_Nam", "Ma_So", "Do_Phong_Dai", "Glade", "Ket_Luan", "Ten_Slide"}
     if not required.issubset(raw.columns):
@@ -161,10 +163,34 @@ def build_catalog(metadata: Path, sources: list[Path], lenses: list[int] | None 
     if any(len(values) > 1 for values in case_labels.values()):
         raise ValueError("Conflicting case-level conclusions; review labels before preparation.")
     mode = "smoke" if per_lens is not None else "full"
-    ready = mode == "full" and not missing and labels_reviewed and all(image["patient_id"] and image["case_label"] is not None for image in images)
+    raw_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for image in images:
+        if re.fullmatch(r"[0-9a-f]{64}", image["source_signature"]):
+            raw_groups[image["source_signature"]].append(image)
+    duplicate_groups = [dict(sha256=digest, image_ids=[image["image_id"] for image in group],
+                             patient_ids=sorted({image["patient_id"] for image in group if image["patient_id"]}),
+                             case_ids=sorted({image["case_id"] for image in group}))
+                        for digest, group in sorted(raw_groups.items()) if len(group) > 1]
+    blockers = []
+    if mode != "full":
+        blockers.append("smoke_subset")
+    if missing:
+        blockers.append("missing_source_images")
+    if not labels_reviewed:
+        blockers.append("case_labels_not_reviewed")
+    if any(not image["patient_id"] for image in images):
+        blockers.append("patient_identity_not_verified")
+    if any(image["case_label"] is None for image in images):
+        blockers.append("unknown_case_labels")
+    if any(not re.fullmatch(r"[0-9a-f]{64}", image["source_signature"]) for image in images):
+        blockers.append("raw_sha256_pending_import_audit")
+    if duplicate_groups:
+        blockers.append("duplicate_raw_content_requires_review")
+    ready = not blockers
     body = dict(schema_version=1, mode=mode, metadata_sha256=file_hash(metadata),
                 lenses=selected_lenses, images=images, missing_images=missing,
                 labels_reviewed=labels_reviewed, training_ready=ready,
+                training_blockers=blockers, duplicate_source_groups=duplicate_groups,
                 coverage={str(lens): {"expected": expected[lens], "selected": len([x for x in images if x["objective_lens"] == lens])} for lens in selected_lenses})
     body["catalog_id"] = fingerprint(body)
     return dict(body, sources=definitions)
@@ -173,4 +199,5 @@ def build_catalog(metadata: Path, sources: list[Path], lenses: list[int] | None 
 def require_training_ready(catalog: dict[str, Any]) -> None:
     """Reject smoke or unreviewed identity/labels at the training boundary."""
     if catalog.get("mode") != "full" or not catalog.get("training_ready"):
-        raise ValueError("Training requires full coverage, verified patient mapping and reviewed case labels.")
+        raise ValueError("Training requires full coverage, verified patient mapping and reviewed case labels; "
+                         f"blockers: {catalog.get('training_blockers', [])}")

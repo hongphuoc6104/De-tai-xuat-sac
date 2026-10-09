@@ -66,7 +66,22 @@ Add `--keep-work` to retain a verified staged source shard on SSD after a new pr
 - `prepare` writes an authoritative catalog and committed raw TAR shards with per-image checksums. `--max-shards` limits newly committed shards in that invocation; repeat the same command to continue.
 - `verify` checks the release descriptor, committed shard archives, and member contents.
 - `process` visits committed raw shards in order, stages one shard under the SSD work root, and publishes per-shard QC, tile metadata, lossless patches, and a verified commit under `<output>/<shard_id>/<processing_id>/`. Existing commits for the same processing settings are verified before they count as reused. `--max-shards` counts newly processed results, so reruns pass already completed work and continue forward; changing processing settings creates a separate result.
-- Tile coordinates use the upper-left origin and refer to original image pixels. Border tiles record valid dimensions when white padding is needed. `tile_id` includes the canonical catalog `image_id`, raw image checksum, coordinates, and versioned processing settings, so separate source instances remain distinct and IDs do not depend on workspace paths. `content_tile_id` excludes the source identity and identifies matching pixel content and coordinates for duplicate review.
+- Tile coordinates use the upper-left origin and refer to original image pixels. Border tiles record valid dimensions when white padding is needed. `tile_id` includes the canonical catalog `image_id`, raw image checksum, coordinates, and versioned processing settings, so separate source instances remain distinct and IDs do not depend on workspace paths. `content_tile_id` excludes the source identity and identifies matching raw-file bytes and coordinates for duplicate review; it is not a perceptual near-duplicate detector.
 - QC reports decode, geometry, image mode, objective lens, tissue, and focus observations for review. Empty/no-tissue fields remain explicit in QC output.
 
 Partial raw releases can be verified and processed, but their committed subset does not represent complete cohort coverage. A `complete` release means the catalog's planned raw shards were committed; it does not certify clinical label correctness, patient identity, or readiness for model training.
+
+## Real-data E2E proof
+
+Run the standalone bounded smoke driver against the actual source folder, keeping all outputs separate from raw inputs:
+
+```bash
+python scripts/run_data_smoke.py \
+  --data-root /path/to/data \
+  --output /path/to/Results/data_smoke/multi3 \
+  --lenses 4 10 40 --per-lens 3
+```
+
+The driver limits local work to 1–5 images per lens, commits at most one raw shard per invocation, resumes packaging and processing, verifies that a final rerun leaves committed outputs unchanged, and checks that staged raw TIFFs were cleaned. It writes `execution_actions.json` and `summary.json` with command exit codes, counts and timing. A second trial can use `--lenses 4 --per-lens 2`. Real source ZIPs are read only for selected members, never fully decoded by this driver.
+
+The catalog records `training_blockers` and exact-SHA duplicate groups. Smoke, unknown labels, unverified patients, unreviewed labels, exact raw duplicates, or ZIP content whose per-image SHA audit is still pending never pass the catalog training gate. Full scientific readiness needs a separate cohort-wide SHA audit after import and reviewed identity/label/bag construction. This preparation package does not promote a CRC-only catalog to scientific training approval.

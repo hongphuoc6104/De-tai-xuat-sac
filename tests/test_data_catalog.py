@@ -17,7 +17,7 @@ def make_source(root: Path) -> tuple[Path, Path]:
     rows = []
     for i in range(6):
         name = f"img_{i}.tiff"
-        Image.new("RGB", (16, 16), "purple").save(source / name)
+        Image.new("RGB", (16, 16), (100 + i, 0, 150)).save(source / name)
         rows.append(dict(Ten_File=name, Ma_Nam="YCT 26", Ma_So=str(i + 1), Do_Phong_Dai="4X",
                          Glade="0" if i < 3 else "4", Ten_Slide="Slide1-2",
                          Ket_Luan="TĂNG SẢN LÀNH TÍNH" if i < 3 else "CARCINÔM TUYẾN TIỀN LIỆT"))
@@ -80,6 +80,29 @@ def test_missing_images_and_conflicting_case_labels_are_exposed(tmp_path: Path) 
     with pytest.raises(ValueError, match="Conflicting case-level"):
         catalog.build_catalog(metadata, [source], lenses=[4])
     assert not result["training_ready"]
+
+
+def test_duplicate_content_cannot_pass_patient_training_gate(tmp_path: Path) -> None:
+    """Identical file content assigned to distinct patients is retained for review."""
+    source, metadata = make_source(tmp_path)
+    (source / "img_3.tiff").write_bytes((source / "img_0.tiff").read_bytes())
+    identities = tmp_path / "patients.csv"
+    pd.DataFrame({"case_id": [f"YCT26_{i}" for i in range(1, 7)],
+                  "patient_id": [f"person-{i}" for i in range(1, 7)]}).to_csv(identities, index=False)
+    result = catalog.build_catalog(metadata, [source], lenses=[4], identity_map=identities, labels_reviewed=True)
+    assert not result["training_ready"]
+    assert result["duplicate_source_groups"][0]["image_ids"] == ["img_0", "img_3"]
+    assert "duplicate_raw_content_requires_review" in result["training_blockers"]
+    with pytest.raises(ValueError, match="duplicate_raw_content"):
+        catalog.require_training_ready(result)
+
+
+def test_review_confirmation_is_not_a_truthy_string(tmp_path: Path) -> None:
+    """A string such as false cannot silently approve clinical labels."""
+    source, metadata = make_source(tmp_path)
+    with pytest.raises(ValueError, match="explicit boolean"):
+        catalog.build_catalog(metadata, [source], lenses=[4], labels_reviewed="false")
+    assert metadata.exists()
 
 
 @pytest.mark.parametrize("member", ["../bad.tiff", "/bad.tiff", "x//bad.tiff", "C:\\bad.tiff"])
