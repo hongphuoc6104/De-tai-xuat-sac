@@ -4,11 +4,13 @@ import json
 import os
 import random
 import re
-from pathlib import Path
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data_integrity import validate_frame, assert_disjoint, lock_config, patient_predictions, verify_against_metadata
 from typing import Dict, List, Tuple
+
+from data_integrity import assert_disjoint, lock_config, patient_predictions, validate_frame, verify_against_metadata
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
 
@@ -19,7 +21,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_RAW_ROOT = SCRIPT_DIR.parent
@@ -252,9 +253,7 @@ def train_one_fold(exp_name, model_name, mag, seed, fold_id, train_df, val_df, t
     for split_name, frame in [("train",train_df),("val",val_df),("test",test_df)]:
         frame.to_csv(run_dir / f"{split_name}_manifest.csv", index=False)
     ds_tr = step6.TileDataset(train_df, img_size=args.img_size, train=True)
-    ds_va = step6.TileDataset(val_df, img_size=args.img_size, train=False)
     dl_tr = step6.make_train_loader(train_df, ds_tr, args.batch_size, args.num_workers, args.balance, use_pin_memory)
-    dl_va = DataLoader(ds_va, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=use_pin_memory)
 
     model = step6.build_model(model_name, img_size=args.img_size).to(device)
     optimizer = torch.optim.AdamW(

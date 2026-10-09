@@ -2,16 +2,15 @@ import argparse
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_RAW_ROOT = SCRIPT_DIR.parent

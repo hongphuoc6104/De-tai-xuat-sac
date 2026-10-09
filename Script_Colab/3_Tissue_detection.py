@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_RAW_ROOT = SCRIPT_DIR.parent
 DEFAULT_RESULTS_ROOT = DEFAULT_RAW_ROOT / "Results"
@@ -153,7 +152,7 @@ def load_slide_table(metadata_path, qc_results_path, image_dir, max_slides=None)
     if "pass_qc" not in qc_df.columns:
         raise RuntimeError("QC results must contain a pass_qc column.")
 
-    passed_qc = qc_df[qc_df["pass_qc"] == True].copy()
+    passed_qc = qc_df[qc_df["pass_qc"].astype(bool)].copy()
     passed_qc["objective_lens"] = passed_qc["objective_lens"].map(normalize_lens)
 
     keep_meta = [col for col in ["image_id", "data_provider", "isup_grade"] if col in meta_df.columns]

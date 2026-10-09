@@ -4,14 +4,23 @@ import json
 import os
 import random
 import re
-import tarfile
 import shutil
+import tarfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from data_integrity import (metadata_table, validate_frame, split_patients, assert_disjoint,
-                            patient_predictions, file_hash, fingerprint, atomic_json, lock_config)
+from data_integrity import (
+    assert_disjoint,
+    atomic_json,
+    file_hash,
+    fingerprint,
+    lock_config,
+    metadata_table,
+    patient_predictions,
+    split_patients,
+    validate_frame,
+)
 
 PIPELINE_VERSION = 'precut-pretrained-v2'
 IMAGE_EXTENSIONS = {'.png','.jpg','.jpeg','.tif','.tiff'}
@@ -57,8 +66,9 @@ def list_drive_tiles(service, folder_id):
 
 def download_drive_tiles(source_url,root):
     import hashlib
-    from google.colab import auth
+
     import google.auth
+    from google.colab import auth
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseDownload
     match=re.search(r'/folders/([A-Za-z0-9_-]+)',source_url)
@@ -235,8 +245,14 @@ def seed_worker(_):
 def build_model(name, pretrained=True, image_size=224):
     import torch
     from torch import nn
-    from torchvision.models import (efficientnet_b0, convnext_tiny, vit_b_16,
-                                    EfficientNet_B0_Weights, ConvNeXt_Tiny_Weights, ViT_B_16_Weights)
+    from torchvision.models import (
+        ConvNeXt_Tiny_Weights,
+        EfficientNet_B0_Weights,
+        ViT_B_16_Weights,
+        convnext_tiny,
+        efficientnet_b0,
+        vit_b_16,
+    )
     def backbone(kind):
         if kind == 'efficientnet':
             m = efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1 if pretrained else None)
@@ -271,9 +287,9 @@ def build_model(name, pretrained=True, image_size=224):
 
 def make_loader(df, config, train=False, seed=42):
     import torch
-    from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
     from PIL import Image
-    from torchvision.transforms import functional as TF, InterpolationMode
+    from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+    from torchvision.transforms import InterpolationMode, functional as TF
     percentile, clahe_on = METHODS[config['experiment']]
     class Tiles(Dataset):
         def __len__(self): return len(df)
@@ -316,7 +332,7 @@ def make_loader(df, config, train=False, seed=42):
 
 
 def metrics(y, p, threshold=.5):
-    from sklearn.metrics import roc_auc_score, confusion_matrix, f1_score, precision_score
+    from sklearn.metrics import confusion_matrix, f1_score, precision_score, roc_auc_score
     y,p = np.asarray(y,int),np.asarray(p,float)
     if not len(y) or set(np.unique(y)) != {0,1} or not np.isfinite(p).all():
         raise ValueError('Metrics require finite predictions and both classes.')

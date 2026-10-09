@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_RAW_ROOT = SCRIPT_DIR.parent
 DEFAULT_RESULTS_ROOT = DEFAULT_RAW_ROOT / "Results"
@@ -160,10 +159,10 @@ def preprocess_tile(
 
     if apply_clahe:
         lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
-        l, a, b = cv2.split(lab)
+        lum, a, b = cv2.split(lab)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        l = clahe.apply(l)
-        lab = cv2.merge([l, a, b])
+        lum = clahe.apply(lum)
+        lab = cv2.merge([lum, a, b])
         img_rgb = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
     return img_rgb

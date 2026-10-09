@@ -1,0 +1,33 @@
+======================================================================
+  VERIFIABLE TEST EXECUTION PROOF LOG (AGENTS.md Trạm 2)
+======================================================================
+Timestamp       : 2026-10-09T07:06:55.532399
+Commit Hash     : 7aa0781
+Branch          : main
+Command         : pytest tests/test_medical_guardrails.py
+Duration        : 0.47 seconds
+Exit Code       : 0
+AST Integrity   : PASSED (19 active assertions verified)
+
+--- STDOUT ---
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /data/đề tài xuất sắc
+configfile: pyproject.toml
+collecting ... collected 7 items
+
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_strict_grade_valid PASSED [ 14%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_strict_grade_invalid PASSED [ 28%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_strict_lens_valid PASSED [ 42%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_strict_lens_invalid PASSED [ 57%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_zero_patient_leakage_assertion_passes_on_disjoint PASSED [ 71%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_zero_patient_leakage_assertion_fails_on_overlap PASSED [ 85%]
+tests/test_medical_guardrails.py::TestMedicalGuardrails::test_patient_split_produces_disjoint_sets PASSED [100%]
+
+============================== 7 passed in 0.23s ===============================
+
+
+--- STDERR ---
+
+======================================================================

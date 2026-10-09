@@ -2,16 +2,15 @@ import argparse
 import json
 import os
 import re
-import zipfile
-import xml.etree.ElementTree as ET
-from pathlib import Path
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from data_integrity import (metadata_table, identity_map, split_patients as strict_split,
-                            assert_disjoint, validate_frame, strict_grade, strict_lens,
-                            lock_config, fingerprint, patient_predictions, file_hash, verify_against_metadata)
+import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from typing import Dict, List, Tuple
+
+from data_integrity import assert_disjoint, identity_map, strict_grade, strict_lens, verify_against_metadata
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
 
@@ -22,7 +21,6 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_RAW_ROOT = SCRIPT_DIR.parent

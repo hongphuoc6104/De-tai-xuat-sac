@@ -47,47 +47,50 @@ flowchart LR
 
 ---
 
-## III. Pipeline Phát Triển: No-Mistake (Băng Chuyền 6 Bước)
+## III. Pipeline Phát Triển: No-Mistake (Băng Chuyền 6 Bước Tích Hợp)
 
-Mọi mã nguồn mới hoặc thay đổi chức năng đều phải đi qua băng chuyền chuẩn hóa gồm 6 trạm nghiêm ngặt trước khi được tích hợp. Tuyệt đối không nhảy cóc hoặc cắt xén quy trình.
+Mọi mã nguồn mới hoặc thay đổi chức năng đều phải đi qua băng chuyền chuẩn hóa gồm 6 trạm nghiêm ngặt trước khi được tích hợp. Toàn bộ công cụ đã cài đặt (`treehouse`, `gh-axi`, `lavish-axi`, `ruff`, `pytest`) đã được ráp thành CLI điều phối thống nhất: `./pipeline` (hoặc `scripts/conveyor.py`).
 
 ```mermaid
 flowchart LR
-    A["1. Review phản biện"] --> B["2. Test + Bằng chứng"]
-    B --> C["3. Docs"]
-    C --> D["4. Lint"]
-    D --> E["5. Mở PR"]
-    E --> F["6. Trông CI"]
+    A["1. Phản Biện (lavish-axi)"] --> B["2. Test & Bằng Chứng (pytest + AST)"]
+    B --> C["3. Docs (PLAYBOOK.md)"]
+    C --> D["4. Lint (ruff + compileall)"]
+    D --> E["5. Mở PR (treehouse + gh-axi)"]
+    E --> F["6. Trông CI (gh-axi watch)"]
 ```
 
-1. **Trạm 1: Review Phản Biện (Adversarial Critique):**
-   - Tự phản biện và lật lại vấn đề trước khi viết hoặc chốt code:
-     - Thiết kế có kẽ hở logic, memory/VRAM leak hoặc race condition nào không?
-     - Có nguy cơ vi phạm ranh giới dữ liệu y tế (patient data leakage) không?
-     - Có giả định ngầm nào về đường dẫn, cấu trúc dữ liệu hoặc môi trường (Local vs Colab) chưa được kiểm soát?
-   - Chỉ chuyển trạm khi toàn bộ nghi vấn phản biện đã có lời giải thỏa đáng.
+### Các Lệnh Điều Phối Băng Chuyền (Conveyor CLI)
+- `./pipeline status`: Kiểm tra toàn diện tính sẵn sàng của 7 công cụ (`treehouse`, `gh-axi`, `lavish-axi`, `ruff`, `pytest`, `git`, `python3`) và dữ liệu.
+- `./pipeline run`: Tự động vận hành liên hoàn 6 trạm từ Trạm 1 đến Trạm 6.
+- `./pipeline station <1..6>`: Vận hành độc lập từng trạm cụ thể.
+- `./pipeline medical [--step 1..8] [--dry-run]`: Điều phối pipeline 8 bước xử lý ảnh bệnh học mô học.
 
-2. **Trạm 2: Test + Bằng Chứng (Testing with Verifiable Proof):**
-   - Viết và chạy test thực tế bao phủ đầy đủ các ca thành công và ca biên (edge cases).
-   - **Bắt buộc có bằng chứng thực thi:** Phải có log chạy thực tế, output stdout/stderr, test summary hoặc metrics minh bạch chứng minh test pass 100%. Tuyệt đối không suy đoán hay nói suông "code chạy được".
+### Quy Trình Chi Tiết Từng Trạm:
+1. **Trạm 1: Review Phản Biện (Adversarial Critique & Lavish Dashboard):**
+   - Tự động chạy bộ kiểm tra tĩnh & ranh giới y tế (Zero Patient Leakage, VRAM bounds, tính tương thích Local/Colab).
+   - Tích hợp `lavish-axi`: Tự động sinh báo cáo tương tác trực quan tại `.lavish/pipeline_review.html`.
+   - Có thể mở phiên review trực quan bằng cờ `--launch-lavish`.
+
+2. **Trạm 2: Test + Bằng Chứng (Testing with Verifiable Proof & AST Integrity):**
+   - Chạy test suite thực tế qua `pytest tests`.
+   - **AST Integrity Check:** Phân tích cú pháp AST đảm bảo 100% test method có active assertion (`assert` hoặc context `pytest.raises`), tuyệt đối cấm test rỗng/test giả tạo.
+   - **Bằng chứng thực thi:** Tự động lưu log chi tiết (timestamp, commit hash, duration, output) vào `Results/proofs/test_evidence_<timestamp>.log`.
 
 3. **Trạm 3: Docs (Documentation Sync):**
-   - Đồng bộ tài liệu kỹ thuật ngay khi code thay đổi:
-     - Docstrings chuẩn mực, type annotations rõ ràng và chính xác.
-     - Cập nhật hướng dẫn sử dụng, giải thích tham số nếu thay đổi interface/pipeline.
-     - Đồng bộ bài học kinh nghiệm vào [PLAYBOOK.md](file:///data/đề tài xuất sắc/PLAYBOOK.md) nếu có phát hiện quan trọng.
+   - Đồng bộ docstrings và type annotations.
+   - Tự động kiểm tra tính hợp lệ của [PLAYBOOK.md](file:///data/đề tài xuất sắc/PLAYBOOK.md) theo chuẩn Điều IV.
 
 4. **Trạm 4: Lint (Static Analysis & Clean Code):**
-   - Kiểm tra tĩnh toàn bộ mã nguồn bằng linter và formatter (flake8/ruff, black, mypy,...).
-   - Đảm bảo 0 warning/error: không có dead code, import thừa, biến không dùng hoặc format lệch chuẩn.
+   - Chạy `ruff check .` và `python3 -m compileall -q .`.
+   - Đảm bảo 0 warning / 0 error.
 
-5. **Trạm 5: Mở PR (Pull Request Preparation & Delivery):**
-   - Đóng gói commit gọn gàng theo chuẩn Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`).
-   - Tạo PR/bản giao nộp với mô tả cấu trúc đầy đủ: Bối cảnh (Why), Chi tiết thay đổi (What), Bằng chứng nghiệm thu (Test Evidence).
+5. **Trạm 5: Mở PR (Pull Request Preparation & Delivery via Treehouse & gh-axi):**
+   - Tích hợp `treehouse`: Quản lý nhánh độc lập trong worktree cách ly (`.worktrees/`), khóa worktree (`treehouse lock`).
+   - Tích hợp `gh-axi`: Kiểm tra commit theo Conventional Commits, tự động soạn thảo PR body chuẩn cấu trúc (Why, What, Test Evidence), và gọi `gh-axi pr create`.
 
-6. **Trạm 6: Trông CI (CI Watch to Green):**
-   - Giám sát tiến độ chạy CI/CD pipeline cho đến khi toàn bộ checks chuyển sang trạng thái thành công (Green).
-   - Nếu CI fail: Không bỏ mặc hoặc chuyển giao task; chủ động đào sâu log lỗi, khắc phục tận gốc và verify lại cho đến khi CI xanh hoàn toàn.
+6. **Trạm 6: Trông CI (CI Watch to Green via gh-axi):**
+   - Tích hợp `gh-axi`: Theo dõi tiến độ GitHub Actions qua `gh-axi run list` và `gh-axi run watch` cho đến khi tất cả checks chuyển sang Green.
 
 ---
 
