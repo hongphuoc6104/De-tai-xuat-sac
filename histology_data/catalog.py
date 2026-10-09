@@ -35,7 +35,7 @@ def source_inventory(source: Path, source_id: str) -> list[dict[str, Any]]:
                     raise ValueError("Source images must be regular files within their source root.")
                 entries.append(dict(source_id=source_id, source_member=safe_member(path.relative_to(source).as_posix()),
                                     file_name=path.name, byte_size=path.stat().st_size,
-                                    source_signature=file_hash(path)))
+                                    source_signature=None))
     elif source.is_file() and zipfile.is_zipfile(source):
         with zipfile.ZipFile(source) as archive:
             seen: set[str] = set()
@@ -138,10 +138,20 @@ def build_catalog(metadata: Path, sources: list[Path], lenses: list[int] | None 
             groups: dict[tuple[int | None, str], list[dict[str, Any]]] = defaultdict(list)
             for record in records:
                 groups[(record["case_label"], record["case_id"])].append(record)
-            keys = sorted(groups, key=lambda key: (key[0] is None, str(key[0]), key[1]))
-            order = [item for offset in range(max(map(len, groups.values()))) for key in keys if offset < len(groups[key]) for item in [groups[key][offset]]]
+            labels = sorted({key[0] for key in groups}, key=lambda value: (value is None, str(value)))
+            class_records = {}
+            for label in labels:
+                keys = sorted(key for key in groups if key[0] == label)
+                class_records[label] = [groups[key][offset] for offset in range(max(len(groups[key]) for key in keys))
+                                        for key in keys if offset < len(groups[key])]
+            order = [class_records[label][offset] for offset in range(max(map(len, class_records.values())))
+                     for label in labels if offset < len(class_records[label])]
             records = order[:per_lens]
         images.extend(records)
+    roots = {source["source_id"]: Path(source["path"]) for source in definitions}
+    for image in images:
+        if image["source_signature"] is None:
+            image["source_signature"] = file_hash(roots[image["source_id"]] / image["source_member"])
     ids = [image["image_id"] for image in images]
     if len(ids) != len(set(ids)):
         raise ValueError("Image IDs collide across magnifications.")

@@ -59,3 +59,11 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - **Giả định sai (Wrong Assumptions):** Giả định cùng một quy tắc quote có thể dùng cho mọi giá trị trong unit file.
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Escape dấu cách của WorkingDirectory= thành \x20, giữ quote riêng cho từng đối số ExecStart; kiểm tra lại unit bằng systemd-analyze --user verify và test hồi quy E2E, cả hai đều pass.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Dùng cú pháp escape theo loại directive của systemd; không áp dụng shell quoting vào giá trị đường dẫn trong unit file.
+
+### [ERR-20261009-03] Tập smoke đọc toàn bộ ảnh nguồn và bỏ sót lớp dương
+- **Triệu chứng (Symptom):** Public catalog API với sáu TIFF thật và `per_lens=2` đọc checksum cả sáu ảnh, đồng thời chọn hai ca lành dù nguồn có ca ung thư.
+- **Tái hiện E2E (Reproduction Path):** `pytest tests/test_data_catalog.py::test_smoke_alternates_available_case_labels tests/test_data_catalog.py::test_smoke_hashes_only_selected_files`; trước sửa, kết quả là labels `[0,0]` và sáu lượt hash TIFF cho hai ảnh được chọn. Fixture chạy inventory → metadata → selection trên file ảnh/CSV thật.
+- **Nguyên nhân cốt lõi (Root Cause):** Inventory directory hash ảnh trước selection; selector đi qua toàn bộ ca của lớp 0 trước lớp 1.
+- **Giả định sai (Wrong Assumptions):** Giả định giới hạn sau inventory cũng giới hạn I/O; round-robin theo ca được coi là cân bằng giữa lớp.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Inventory chỉ liệt kê path/size, hash sau khi chọn; xen kẽ lớp và ca. Cả tám kiểm thử catalog pass, chỉ hai TIFF được hash và nhãn `{0,1}` có mặt. Smoke luôn `training_ready=false` dù có identity map và nhãn đã review.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Áp dụng giới hạn kỹ thuật trước đọc/decode/hash ảnh; smoke phải đo coverage của ca/lớp và không được báo là release khoa học đầy đủ.
