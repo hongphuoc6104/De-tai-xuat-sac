@@ -1,0 +1,4 @@
+interface:
+  display_name: "Colab Manager"
+  short_description: "Quản lý profile, phiên Colab và bộ đếm T4."
+  default_prompt: "Quản lý profile, bộ đếm và vòng đời phiên Google Colab."
