@@ -58,7 +58,7 @@ def test_processing_preserves_coordinates_padding_and_provenance(tmp_path: Path)
                             "blur_threshold": 1_000_000.0})
 
     assert result["reused"] is False
-    assert result["processing_version"] == "cpu-tiles-v2"
+    assert result["processing_version"] == "cpu-tiles-v3"
     assert result["tiles_written"] == 2
     rows = _rows(tmp_path / "output" / shard_id / result["processing_id"] / "tiles.jsonl")
     assert [(row["x"], row["y"], row["w"], row["h"], row["valid_w"], row["valid_h"])
@@ -101,6 +101,61 @@ def test_no_tissue_is_saved_as_review_qc_without_patch_targets(tmp_path: Path) -
     assert qc["reasons"] == ["no_tissue", "no_tiles_met_tissue_threshold"]
     with tarfile.open(directory / "patches.tar", mode="r:") as archive:
         assert archive.getmembers() == []
+
+
+def test_green_gray_cast_background_is_reviewed_without_tiles(tmp_path: Path) -> None:
+    cast = np.full((64, 64, 3), (140, 150, 135), dtype=np.uint8)
+    release, shard_id = _make_release(tmp_path, cast)
+    result = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                           {"tile_size": 32, "stride": 32, "min_tissue": 0.2})
+
+    assert result["tiles_written"] == 0
+    assert result["images_review"] == 1
+    qc = _rows(Path(result["output_path"]) / "qc.jsonl")[0]
+    assert qc["status"] == "review"
+    assert qc["tissue_fraction"] == 0.0
+    assert qc["background_reference_rgb"] == [140.0, 150.0, 135.0]
+    assert qc["tissue_method"] == "normalized_od_he_contrast_v1"
+    assert qc["tissue_method_calibration"] == "heuristic_not_clinically_calibrated"
+
+
+def test_he_roi_is_retained_on_cast_background_without_pixel_changes(tmp_path: Path) -> None:
+    pixels = np.full((64, 64, 3), (140, 150, 135), dtype=np.uint8)
+    pixels[32:64, 32:64] = (105, 45, 120)
+    release, shard_id = _make_release(tmp_path, pixels)
+    result = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                           {"tile_size": 32, "stride": 32, "min_tissue": 0.2})
+
+    tiles = _rows(Path(result["output_path"]) / "tiles.jsonl")
+    qc = _rows(Path(result["output_path"]) / "qc.jsonl")[0]
+    assert [(row["x"], row["y"]) for row in tiles] == [(32, 32)]
+    assert qc["background_reference_rgb"] == [140.0, 150.0, 135.0]
+    with tarfile.open(Path(result["output_path"]) / "patches.tar", mode="r:") as archive:
+        patch_file = archive.extractfile(tiles[0]["patch_member"])
+        assert patch_file is not None
+        with Image.open(io.BytesIO(patch_file.read())) as image:
+            patch = np.asarray(image)
+    assert np.array_equal(patch, pixels[32:64, 32:64])
+
+
+def test_tissue_threshold_is_configurable_and_changes_processing_fingerprint(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((64, 64, 3), (140, 150, 135), dtype=np.uint8)
+    pixels[32:64, 32:64] = (105, 45, 120)
+    release, shard_id = _make_release(tmp_path, pixels)
+    normal = process_shard(release, shard_id, tmp_path / "ssd", tmp_path / "output",
+                           {"tile_size": 32, "stride": 32, "min_tissue": 0.2})
+    strict = process_shard(
+        release, shard_id, tmp_path / "ssd", tmp_path / "output",
+        {"tile_size": 32, "stride": 32, "min_tissue": 0.2,
+         "tissue_green_contrast_threshold": 1.0},
+    )
+
+    assert normal["tiles_written"] == 1
+    assert strict["tiles_written"] == 0
+    assert strict["config"]["tissue_green_contrast_threshold"] == 1.0
+    assert normal["processing_id"] != strict["processing_id"]
 
 
 def test_cap_marks_output_smoke_and_resume_verifies_committed_files(
@@ -226,6 +281,9 @@ def test_corrupt_image_fails_without_publishing_success(tmp_path: Path) -> None:
     {"min_tissue": 1.01},
     {"max_tiles_per_image": -1},
     {"blur_threshold": float("nan")},
+    {"tissue_od_mean_threshold": 5.1},
+    {"background_reference_percentile": 101.0},
+    {"tissue_method": "saturation"},
     {"unexpected": True},
 ])
 def test_invalid_processing_parameters_are_rejected(tmp_path: Path, config: dict[str, object]) -> None:

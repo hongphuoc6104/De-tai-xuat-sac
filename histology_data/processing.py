@@ -1,4 +1,4 @@
-"""Bounded CPU tiling and per-image quality control for committed shards."""
+"""Bounded CPU tiling and heuristic H&E QC; tissue thresholds are not clinically calibrated."""
 from __future__ import annotations
 
 import io
@@ -18,20 +18,28 @@ from PIL import Image, UnidentifiedImageError
 from .io import atomic_json, file_hash, fingerprint, verified_copy
 from .shards import load_shard_manifest, stage_shard
 
-DEFAULT_CONFIG: dict[str, int | float] = {
+TISSUE_METHOD = "normalized_od_he_contrast_v1"
+TISSUE_METHOD_CALIBRATION = "heuristic_not_clinically_calibrated"
+DEFAULT_CONFIG: dict[str, int | float | str] = {
     "tile_size": 256,
     "stride": 256,
     "min_tissue": 0.2,
     "max_tiles_per_image": 0,
     "blur_threshold": 0.0,
+    "tissue_method": TISSUE_METHOD,
+    "tissue_od_mean_threshold": 0.05,
+    "tissue_green_contrast_threshold": 0.03,
+    "background_neutral_chroma_threshold": 0.2,
+    "background_reference_percentile": 99.0,
 }
-PROCESSING_VERSION = "cpu-tiles-v2"
+PROCESSING_VERSION = "cpu-tiles-v3"
 _MAX_TILE_SIZE = 4096
+_BACKGROUND_SAMPLE_LIMIT = 4096
 _IMAGE_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 _LENSES = {4, 10, 40}
 
 
-def _validated_config(config: dict[str, Any] | None) -> dict[str, int | float]:
+def _validated_config(config: dict[str, Any] | None) -> dict[str, int | float | str]:
     if config is not None and not isinstance(config, dict):
         raise TypeError("config must be a dictionary or None.")
     supplied = {} if config is None else dict(config)
@@ -49,22 +57,41 @@ def _validated_config(config: dict[str, Any] | None) -> dict[str, int | float]:
         raise ValueError(f"stride must be between 1 and {_MAX_TILE_SIZE}.")
     if values["max_tiles_per_image"] < 0:
         raise ValueError("max_tiles_per_image cannot be negative.")
-    for name in ("min_tissue", "blur_threshold"):
+    for name in (
+        "min_tissue", "blur_threshold", "tissue_od_mean_threshold",
+        "tissue_green_contrast_threshold", "background_neutral_chroma_threshold",
+        "background_reference_percentile",
+    ):
         value = values[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError(f"{name} must be numeric.")
         if not math.isfinite(value):
             raise ValueError(f"{name} must be finite.")
+    if values["tissue_method"] != TISSUE_METHOD:
+        raise ValueError(f"tissue_method must be {TISSUE_METHOD!r}.")
     if not 0.0 <= values["min_tissue"] <= 1.0:
         raise ValueError("min_tissue must be in [0, 1].")
     if values["blur_threshold"] < 0.0:
         raise ValueError("blur_threshold cannot be negative.")
+    if not 0.0 <= values["tissue_od_mean_threshold"] <= 5.0:
+        raise ValueError("tissue_od_mean_threshold must be in [0, 5].")
+    if not 0.0 <= values["tissue_green_contrast_threshold"] <= 5.0:
+        raise ValueError("tissue_green_contrast_threshold must be in [0, 5].")
+    if not 0.0 <= values["background_neutral_chroma_threshold"] <= 3.0:
+        raise ValueError("background_neutral_chroma_threshold must be in [0, 3].")
+    if not 50.0 <= values["background_reference_percentile"] <= 100.0:
+        raise ValueError("background_reference_percentile must be in [50, 100].")
     return {
         "tile_size": int(values["tile_size"]),
         "stride": int(values["stride"]),
         "min_tissue": float(values["min_tissue"]),
         "max_tiles_per_image": int(values["max_tiles_per_image"]),
         "blur_threshold": float(values["blur_threshold"]),
+        "tissue_method": str(values["tissue_method"]),
+        "tissue_od_mean_threshold": float(values["tissue_od_mean_threshold"]),
+        "tissue_green_contrast_threshold": float(values["tissue_green_contrast_threshold"]),
+        "background_neutral_chroma_threshold": float(values["background_neutral_chroma_threshold"]),
+        "background_reference_percentile": float(values["background_reference_percentile"]),
     }
 
 
@@ -121,24 +148,66 @@ def _image_path(stage_root: Path, member: str) -> Path:
     return path
 
 
-def _tissue_count(rgb: np.ndarray, y0: int, y1: int, x0: int = 0, x1: int | None = None) -> int:
-    """Count colored, non-background pixels without allocating a full-image mask."""
+def _background_reference(rgb: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+    """Estimate a bright neutral field background from at most 4096 grid samples."""
+    height, width = rgb.shape[:2]
+    pixel_count = height * width
+    sample_count = min(pixel_count, _BACKGROUND_SAMPLE_LIMIT)
+    sample_indices = np.linspace(0, pixel_count - 1, num=sample_count, dtype=np.int64)
+    sample = rgb.reshape(-1, 3)[sample_indices].astype(np.float32)
+    maximum = sample.max(axis=1)
+    minimum = sample.min(axis=1)
+    mean = sample.mean(axis=1)
+    chroma = (maximum - minimum) / np.maximum(mean, 1.0)
+    white_od = np.log(256.0 / (sample + 1.0))
+    he_evidence = _he_evidence_mask(white_od, config)
+    neutral = sample[
+        (chroma <= float(config["background_neutral_chroma_threshold"])) & ~he_evidence
+    ]
+    if neutral.size == 0:
+        return np.full(3, 255.0, dtype=np.float32)
+    reference = np.percentile(
+        neutral,
+        float(config["background_reference_percentile"]),
+        axis=0,
+    )
+    return np.clip(reference, 1.0, 255.0).astype(np.float32)
+
+
+def _tissue_count(
+    rgb: np.ndarray, reference_rgb: np.ndarray, config: dict[str, Any],
+    y0: int, y1: int, x0: int = 0, x1: int | None = None,
+) -> int:
+    """Count H&E-like pixels by background-normalized OD and green stain evidence."""
     width = rgb.shape[1]
     x_end = width if x1 is None else x1
-    block = rgb[y0:y1, x0:x_end]
-    high = np.maximum(np.maximum(block[..., 0], block[..., 1]), block[..., 2]).astype(np.int32)
-    low = np.minimum(np.minimum(block[..., 0], block[..., 1]), block[..., 2]).astype(np.int32)
-    saturation_numerator = (high - low) * 255
-    mask = (high < 240) & (saturation_numerator > high * 20)
+    block = rgb[y0:y1, x0:x_end].astype(np.float32)
+    optical_density = (reference_rgb.reshape(1, 1, 3) + 1.0) / (block + 1.0)
+    np.log(optical_density, out=optical_density)
+    np.maximum(optical_density, 0.0, out=optical_density)
+    mask = _he_evidence_mask(optical_density, config)
     return int(np.count_nonzero(mask))
 
 
-def _tissue_fraction(rgb: np.ndarray) -> float:
+def _he_evidence_mask(optical_density: np.ndarray, config: dict[str, Any]) -> np.ndarray:
+    """Require meaningful normalized OD and green stain absorbance above red/blue."""
+    od_mean = optical_density.mean(axis=-1)
+    green_contrast = optical_density[..., 1] - np.maximum(
+        optical_density[..., 0], optical_density[..., 2],
+    )
+    return (
+        (od_mean >= float(config["tissue_od_mean_threshold"]))
+        & (green_contrast >= float(config["tissue_green_contrast_threshold"]))
+    )
+
+
+def _tissue_fraction(rgb: np.ndarray, reference_rgb: np.ndarray,
+                     config: dict[str, Any]) -> float:
     height, width = rgb.shape[:2]
     total = 0
     for y0 in range(0, height, 256):
         y1 = min(height, y0 + 256)
-        total += _tissue_count(rgb, y0, y1)
+        total += _tissue_count(rgb, reference_rgb, config, y0, y1)
     return total / (height * width)
 
 
@@ -214,7 +283,8 @@ def _jsonl_write(stream: Any, value: dict[str, Any]) -> None:
 
 
 def _iter_tiles(
-    image: dict[str, Any], rgb: np.ndarray, config: dict[str, int | float],
+    image: dict[str, Any], rgb: np.ndarray, reference_rgb: np.ndarray,
+    config: dict[str, Any],
     image_sha256: str, config_id: str,
 ) -> Iterator[tuple[dict[str, Any], np.ndarray]]:
     height, width = rgb.shape[:2]
@@ -227,7 +297,9 @@ def _iter_tiles(
         valid_h = min(tile_size, height - y)
         for x in range(0, width, stride):
             valid_w = min(tile_size, width - x)
-            tissue = _tissue_count(rgb, y, y + valid_h, x, x + valid_w) / (valid_h * valid_w)
+            tissue = _tissue_count(
+                rgb, reference_rgb, config, y, y + valid_h, x, x + valid_w,
+            ) / (valid_h * valid_w)
             if tissue <= 0.0 or tissue < minimum:
                 continue
             if cap and emitted >= cap:
@@ -272,7 +344,7 @@ def _encode_png(rgb: np.ndarray) -> bytes:
     return buffer.getvalue()
 
 
-def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str, int | float],
+def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str, Any],
                     config_id: str, patches_path: Path, tiles_path: Path,
                     qc_path: Path) -> dict[str, int]:
     stats = {"images_seen": 0, "tiles_written": 0, "images_review": 0,
@@ -319,7 +391,8 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
                 raise ValueError(f"Failed to decode source image {image['image_id']}: {exc}") from exc
             if rgb.ndim != 3 or rgb.shape != (source_height, source_width, 3):
                 raise ValueError(f"Unexpected RGB geometry for {image['image_id']}")
-            tissue = _tissue_fraction(rgb)
+            background_reference = _background_reference(rgb, config)
+            tissue = _tissue_fraction(rgb, background_reference, config)
             focus = _focus_score(rgb)
             reasons: list[str] = []
             if tissue <= 0.0:
@@ -333,7 +406,9 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
                 reasons.append("focus_below_review_threshold")
             eligible = 0
             saved = 0
-            for row, tile in _iter_tiles(image, rgb, config, actual_sha, config_id):
+            for row, tile in _iter_tiles(
+                image, rgb, background_reference, config, actual_sha, config_id,
+            ):
                 eligible += 1
                 member = f"patches/{row['tile_id']}.png"
                 encoded = _encode_png(tile)
@@ -344,7 +419,7 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
             max_per_image = int(config["max_tiles_per_image"])
             if max_per_image and eligible == max_per_image:
                 # Count additional candidates without retaining patches or pixel buffers.
-                cap_candidates = _eligible_tile_count(rgb, config)
+                cap_candidates = _eligible_tile_count(rgb, background_reference, config)
                 eligible = cap_candidates
             if eligible == 0:
                 reasons.append("no_tiles_met_tissue_threshold")
@@ -360,6 +435,13 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
                 "source_sha256": actual_sha,
                 "duplicate_source_content": bool(repeated_image_ids),
                 "duplicate_source_image_ids": repeated_image_ids,
+                "tissue_method": config["tissue_method"],
+                "tissue_method_calibration": TISSUE_METHOD_CALIBRATION,
+                "background_reference_rgb": [float(value) for value in background_reference],
+                "tissue_od_mean_threshold": config["tissue_od_mean_threshold"],
+                "tissue_green_contrast_threshold": config["tissue_green_contrast_threshold"],
+                "background_neutral_chroma_threshold": config["background_neutral_chroma_threshold"],
+                "background_reference_percentile": config["background_reference_percentile"],
                 "source_mode": source_mode,
                 "output_mode": "RGB",
                 "width": source_width,
@@ -379,11 +461,12 @@ def _process_images(stage_root: Path, manifest: dict[str, Any], config: dict[str
     return stats
 
 
-def _grid_tile_count(width: int, height: int, config: dict[str, int | float]) -> int:
+def _grid_tile_count(width: int, height: int, config: dict[str, Any]) -> int:
     return math.ceil(width / int(config["stride"])) * math.ceil(height / int(config["stride"]))
 
 
-def _eligible_tile_count(rgb: np.ndarray, config: dict[str, int | float]) -> int:
+def _eligible_tile_count(rgb: np.ndarray, reference_rgb: np.ndarray,
+                         config: dict[str, Any]) -> int:
     height, width = rgb.shape[:2]
     size, stride = int(config["tile_size"]), int(config["stride"])
     threshold = float(config["min_tissue"])
@@ -392,7 +475,9 @@ def _eligible_tile_count(rgb: np.ndarray, config: dict[str, int | float]) -> int
         valid_h = min(size, height - y)
         for x in range(0, width, stride):
             valid_w = min(size, width - x)
-            fraction = _tissue_count(rgb, y, y + valid_h, x, x + valid_w) / (valid_h * valid_w)
+            fraction = _tissue_count(
+                rgb, reference_rgb, config, y, y + valid_h, x, x + valid_w,
+            ) / (valid_h * valid_w)
             count += int(fraction > 0 and fraction >= threshold)
     return count
 
@@ -575,6 +660,8 @@ def process_shard(release_root: Path, shard_id: str, work_root: Path,
             "processing_id": processing_id,
             "config_id": config_id,
             "config": config_value,
+            "tissue_method": config_value["tissue_method"],
+            "tissue_method_calibration": TISSUE_METHOD_CALIBRATION,
             "files": checksums,
             **stats,
         }
@@ -634,7 +721,7 @@ def _read_release_descriptor(release_root: Path) -> dict[str, Any]:
 
 
 def _verify_staged_files(directory: Path, checksums: dict[str, str],
-                         stats: dict[str, int], config: dict[str, int | float]) -> None:
+                         stats: dict[str, int], config: dict[str, Any]) -> None:
     """Verify temporary or published artifacts before writing the commit marker."""
     for name, expected in checksums.items():
         if file_hash(directory / name) != expected:
