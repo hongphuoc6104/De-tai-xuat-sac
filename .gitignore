@@ -1,5 +1,13 @@
 # Datasets and Large Media Files
-train_images/
+/data/
+/datasets/
+/train_images/
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
 *.png
 *.jpg
 *.jpeg
@@ -14,6 +22,11 @@ dist/
 Results/data_smoke/
 Results/shard_data/
 
+# Local study metadata may contain coded patient or slide identifiers
+/Metadata.xlsx
+/train.csv
+/Script_Colab/Metadata.xlsx
+
 # Python artifacts
 __pycache__/
 *.py[cod]
@@ -24,6 +37,24 @@ __pycache__/
 venv/
 .venv/
 env/
+
+# Model weights and generated outputs
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.hdf5
+*.safetensors
+/Results/planning_*/
+/Results/research_*/
+/Results/Step1_Overview_results/*.csv
+/Results/Step1_Overview_results/*.log
+/Results/proofs/test_evidence_*.log
+
+# Local secrets
+.env
+.env.*
+!.env.example
 
 # Worktree directories
 .worktrees/
