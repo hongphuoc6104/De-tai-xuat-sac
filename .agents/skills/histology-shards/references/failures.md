@@ -1,5 +1,21 @@
 # E2E failures và bài học về histology shards
 
+### [ERR-20261010-01] Smoke precut lấy nhãn đầu tiên nhiều lần thay vì luân phiên lớp
+- **Triệu chứng (Symptom):** Mẫu vài patch mỗi vật kính chỉ chọn case thuộc một nhóm kết luận dù cả hai nhóm có ảnh.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_precut.py::test_precut_smoke_reads_examples_per_lens_and_keeps_case_labels_weak -q`; trước sửa, bộ chọn flatten từng nhãn nên kỳ vọng `YCT26_1` và `YCT26_2` nhưng chỉ nhận `YCT26_1`.
+- **Nguyên nhân cốt lõi (Root Cause):** Danh sách case được ghép hết trong một nhóm nhãn trước khi chuyển sang nhóm khác; giới hạn mẫu cắt danh sách quá sớm.
+- **Giả định sai (Wrong Assumptions):** Sắp xếp theo nhãn rồi giới hạn được coi là đủ đại diện cho smoke kỹ thuật.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Chọn luân phiên giữa nhóm nhãn và case cho từng vật kính. Chạy lại test tái hiện và toàn bộ `tests/test_precut.py`; 6 test qua, smoke dữ liệu thật giữ đủ hai patch mỗi vật kính và hai nhãn kết luận ứng viên.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Khi giới hạn smoke có yếu tố phân nhóm, chọn vòng qua các nhóm trước khi áp giới hạn; kiểm tra cả coverage lẫn định danh mẫu.
+
+### [ERR-20261010-02] Notebook Colab import package trước khi giải nén runtime
+- **Triệu chứng (Symptom):** Trạm 2 chạy 98/99 test, nhưng test lint ở `notebooks/Colab_PreCut_Import.ipynb` fail vì import sau thao tác setup, import trùng giữa cell và cú pháp nhiều import một dòng.
+- **Tái hiện E2E (Reproduction Path):** `./pipeline station 2`; bằng chứng ban đầu `Results/proofs/test_evidence_20261010_131312.log`. Trạm 4 liệt kê 10 lỗi Ruff trên notebook.
+- **Nguyên nhân cốt lõi (Root Cause):** Notebook trích code vào các cell; import package sau khi cài runtime bị Ruff xem là import ở giữa cell, còn import `atomic_json` lặp lại ở cell smoke.
+- **Giả định sai (Wrong Assumptions):** Import xuất hiện sau cài package được coi là ngoại lệ khỏi lint cell; import trong cell được coi độc lập dù Ruff phân tích notebook.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Chuyển setup sang `importlib.import_module` sau khi thêm runtime vào đường dẫn, sắp imports chuẩn và dùng symbol đã gán giữa các cell. `ruff check notebooks/Colab_PreCut_Import.ipynb` và test Trạm 4 đều qua; chạy lại toàn bộ station 2.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Kiểm tra import order và định nghĩa dùng chung trên toàn notebook theo quy tắc Ruff; runtime load muộn dùng importlib thay cho import statement giữa cell.
+
 ### [ERR-20261009-03] Tập smoke đọc toàn bộ ảnh nguồn và bỏ sót lớp dương
 - **Triệu chứng (Symptom):** Public catalog API với sáu TIFF thật và `per_lens=2` đọc checksum cả sáu ảnh, đồng thời chọn hai ca lành dù nguồn có ca ung thư.
 - **Tái hiện E2E (Reproduction Path):** `pytest tests/test_data_catalog.py::test_smoke_alternates_available_case_labels tests/test_data_catalog.py::test_smoke_hashes_only_selected_files`; trước sửa, kết quả là labels `[0,0]` và sáu lượt hash TIFF cho hai ảnh được chọn. Fixture chạy inventory → metadata → selection trên file ảnh/CSV thật.

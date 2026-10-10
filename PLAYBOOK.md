@@ -44,6 +44,24 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 
 ## IV. Nhật Ký Lỗi & Bài Học (Active Error Log)
 
+### [ERR-20261010-01] Smoke precut lấy nhãn đầu tiên nhiều lần thay vì luân phiên lớp
+- **Triệu chứng (Symptom):** Mẫu vài patch mỗi vật kính chỉ chọn case thuộc một nhóm kết luận dù cả hai nhóm có ảnh.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_precut.py::test_precut_smoke_reads_examples_per_lens_and_keeps_case_labels_weak -q`; trước sửa chỉ nhận `YCT26_1` thay vì cả hai case.
+- **Nguyên nhân cốt lõi (Root Cause):** Danh sách case được ghép hết trong một nhóm nhãn trước khi chuyển nhóm; giới hạn mẫu cắt danh sách quá sớm.
+- **Giả định sai (Wrong Assumptions):** Sắp xếp theo nhãn rồi giới hạn được coi là đủ đại diện cho smoke kỹ thuật.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Chọn luân phiên giữa nhóm nhãn và case cho từng vật kính. Test tái hiện và toàn bộ `tests/test_precut.py` qua; smoke thật giữ hai patch mỗi vật kính và hai nhóm nhãn ứng viên.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Khi giới hạn smoke có yếu tố phân nhóm, chọn vòng qua nhóm trước khi áp giới hạn; kiểm tra cả coverage lẫn định danh mẫu.
+
+Chi tiết đã chuyển vào [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).
+
+### [ERR-20261010-02] Notebook Colab import package trước khi giải nén runtime
+- **Triệu chứng (Symptom):** Trạm 2 chạy 98/99 test, nhưng test lint notebook fail vì import sau setup, import trùng giữa cell và nhiều import một dòng.
+- **Tái hiện E2E (Reproduction Path):** `./pipeline station 2`; bằng chứng `Results/proofs/test_evidence_20261010_131312.log` ghi 10 lỗi Ruff trong notebook.
+- **Nguyên nhân cốt lõi (Root Cause):** Notebook load package sau khi cài runtime; Ruff kiểm tra các cell và phát hiện thứ tự/import lặp.
+- **Giả định sai (Wrong Assumptions):** Import sau cài package được coi là ngoại lệ khỏi lint cell.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng `importlib.import_module` sau khi thêm runtime vào đường dẫn, sắp imports và dùng chung symbols giữa cell. Ruff notebook và test Trạm 4 qua; chạy lại toàn bộ station 2.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Lint toàn notebook; import runtime muộn qua importlib và tránh khai báo lại imports giữa các cell.
+
 ### [ERR-20261009-01] Đệ quy Pytest và Nhận diện Thiếu Khuyết Của Phân Tích Cú Pháp AST Trong Trạm 2
 - **Triệu chứng (Symptom):** Khi chạy `pytest tests`, test suite bị treo do test station gọi đệ quy toàn bộ `pytest tests`, đồng thời AST Integrity Check ban đầu coi `with pytest.raises` là test rỗng vì thiếu node `ast.Assert`.
 - **Tái hiện E2E (Reproduction Path):** Chạy `./pipeline run` khi `test_pipeline_stations.py` gọi trực tiếp `run_station_2_tests()`.
@@ -75,3 +93,12 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - [ERR-20261009-11] Local pytest wrapper che lỗi import CI: xem histology-shards/references/failures.md.
 
 Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).
+
+
+### [ERR-20261010-03] Báo cáo thời gian giả định commit cũ có trường tùy chọn mới
+- **Triệu chứng (Symptom):** Lệnh thống kê thời gian đóng ZIP trên Colab gặp `KeyError: prefetch_workers`; công việc đóng ZIP vẫn tiếp tục bình thường.
+- **Tái hiện E2E (Reproduction Path):** Chạy `histology_repack_timing_summary.py` trên runtime đã có commit phần 001 từ lệnh benchmark đầu tiên; commit này chưa có trường `prefetch_workers`.
+- **Nguyên nhân cốt lõi (Root Cause):** Helper báo cáo đọc nhiều phiên bản commit vận hành như cùng một schema.
+- **Giả định sai (Wrong Assumptions):** Trường đo tối ưu I/O được coi là bắt buộc ở mọi artifact đã hoàn tất trước đó.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Đọc trường tùy chọn bằng `get`, chỉ tổng hợp nhóm có số luồng được ghi rõ. Chạy lại cùng runtime trả thống kê 6 phần và median 32 luồng 151,585 giây; không sửa commit nguồn hoặc khởi động lại job. Lệnh và kết quả lưu trong `Results/planning_20261010/colab_setup/commands/`.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Tách trường kiểm toàn vẹn bắt buộc khỏi trường đo hiệu năng tùy chọn; không suy diễn giá trị thiếu và không sửa artifact cũ chỉ để báo cáo chạy được.

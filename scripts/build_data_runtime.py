@@ -12,6 +12,7 @@ RUNTIME_FILES = (
     "requirements-data.txt",
     "docs/DATA_SHARDS.md",
     "docs/DATA_SHARDS_CONTRACT.md",
+    "docs/PRECUT_IMPORT.md",
     "configs/data_shards_smoke.json",
     "configs/data_shards_colab.json",
 )
