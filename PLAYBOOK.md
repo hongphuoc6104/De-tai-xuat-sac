@@ -102,3 +102,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Giả định sai (Wrong Assumptions):** Trường đo tối ưu I/O được coi là bắt buộc ở mọi artifact đã hoàn tất trước đó.
 - **Giải pháp & Kiểm chứng (Resolution & Proof):** Đọc trường tùy chọn bằng `get`, chỉ tổng hợp nhóm có số luồng được ghi rõ. Chạy lại cùng runtime trả thống kê 6 phần và median 32 luồng 151,585 giây; không sửa commit nguồn hoặc khởi động lại job. Lệnh và kết quả lưu trong `Results/planning_20261010/colab_setup/commands/`.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Tách trường kiểm toàn vẹn bắt buộc khỏi trường đo hiệu năng tùy chọn; không suy diễn giá trị thiếu và không sửa artifact cũ chỉ để báo cáo chạy được.
+
+- [ERR-20261010-04..07] Feature integrity/resume, budget/completeness, cold notebook và ZIP lookup: xem [.agents/skills/histology-features/SKILL.md](.agents/skills/histology-features/SKILL.md).

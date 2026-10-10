@@ -13,6 +13,9 @@ RUNTIME_FILES = (
     "docs/DATA_SHARDS.md",
     "docs/DATA_SHARDS_CONTRACT.md",
     "docs/PRECUT_IMPORT.md",
+    "docs/FEATURE_EXTRACTION.md",
+    "requirements-features.txt",
+    "configs/features_colab.json",
     "configs/data_shards_smoke.json",
     "configs/data_shards_colab.json",
 )

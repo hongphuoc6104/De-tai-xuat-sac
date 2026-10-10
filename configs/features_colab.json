@@ -1,0 +1,21 @@
+{
+  "metadata": "/content/drive/MyDrive/histology/source/Metadata.xlsx",
+  "source_root": "/content/drive/MyDrive/histology/source/archives",
+  "source_kind": "zip",
+  "output_root": "/content/drive/MyDrive/histology/features/v001",
+  "work_root": "/content/histology-feature-work",
+  "weights_dir": "/content/drive/MyDrive/histology/encoders/resnet50_imagenet_v1",
+  "batch_size": 32,
+  "device": "cuda",
+  "precision": "fp32",
+  "expected_archives": 25,
+  "expected_pngs": 148991,
+  "directory_part_size": 1024,
+  "max_new_parts": null,
+  "max_patches_per_part": null,
+  "budget_minutes": 240,
+  "reserve_minutes": 30,
+  "retries": 3,
+  "aliases": null,
+  "recover_lock": false
+}
