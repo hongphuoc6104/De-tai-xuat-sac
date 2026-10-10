@@ -2,7 +2,7 @@
 
 > **Vai trò tài liệu:** bản tham chiếu chính để phát triển và giám sát dự án. Số liệu và hiện trạng là snapshot ngày 10/10/2026. Các thông số mô hình/CV là thiết kế dự kiến, chưa phải kết quả thực thi. Khi thay đổi thiết kế hoặc chốt thông tin dữ liệu, cập nhật phiên bản và ghi lý do ở lịch sử thay đổi.
 
-**Phiên bản kế hoạch 1.1 · 10/10/2026.** Đây là thiết kế dự kiến để giám sát và triển khai; chưa có kết quả train, thời gian benchmark T4 hoặc độ chính xác của mô hình mới.
+**Phiên bản kế hoạch 1.2 · 10/10/2026.** Đây là thiết kế dự kiến để giám sát và triển khai; chưa có kết quả train hoặc benchmark encoder/MIL. Đã đo truyền dữ liệu và đóng gói trên runtime T4; những tác vụ này dùng CPU/I/O.
 
 **Quyết định vòng đầu:** dùng patch đã được duyệt → tải ResNet50 đã pretrain → đóng băng encoder và tạo feature cache một lần → train mô hình MIL cấp ca → so sánh 4×, 10×, 40× và fusion trên cùng cohort/fold. Mọi xử lý đầy đủ và tác vụ dài chạy trên Colab; local chỉ kiểm kê nhẹ và thử vài mẫu nhỏ khi phát triển.
 
@@ -304,27 +304,31 @@ Sau nghiên cứu có thể refit một model phát hành trên toàn bộ devel
 
 | Trạm | Đầu vào → công việc | Đầu ra lưu | Điều kiện qua trạm / người giám sát xem |
 |---|---|---|---|
-| G0 · nguồn | 25 ZIP + metadata → snapshot, coverage | source_manifest/config | Đủ 25; 1.812 image IDs và 148.991 patch names khớp; decode/CRC toàn bộ còn thiếu |
+| G0 · nguồn | 25 ZIP + metadata → snapshot, coverage | source_manifest/config | Local đủ 25; Drive mới có ZIP gốc 001. Người dùng tải 002–025. 8 ZIP đóng lại là bộ riêng chưa đủ; decode/CRC toàn bộ còn thiếu |
 | G1 · identity/labels | Hồ sơ + mã ca → xác minh người và task | patient_map, labels, cohort | patient_id xác nhận; nhãn đúng cấp; 16-common/18-all rõ. **Chưa xong** |
 | G2 · protocol | Cohort → group outer/inner split, study configs | splits, protocol.json | Không giao người; từng tập đủ lớp; endpoint/threshold/fits đã khóa. **Chưa xong** |
 | G3 · adapter/preflight | Code + vài patch → nối ZIP/metadata, tọa độ, lens, RGB | inventory, smoke QC, part commits | Đã thêm lệnh inventory/import/audit, notebook Colab riêng; smoke 6 patch thật qua. Feature finite, checkpoint và preflight encoder còn thiếu |
-| G4 · import/encode | Một ZIP mỗi lượt → CRC/SHA/shape + encode frozen | manifest, feature parts + commits | Importer có thể chạy theo ZIP; chưa chạy đủ ZIP, chưa có encoder/features hoặc T4 |
+| G4 · import/encode | Một ZIP mỗi lượt → CRC/SHA/shape + encode frozen | manifest, feature parts + commits | Importer có thể chạy theo ZIP; đã xác nhận runtime T4/import dependencies, nhưng chưa chạy full import hoặc encoder/features |
 | G5 · bags | Features + labels/splits → ca×lens references | bags/bundle | Không va chạm bag_id/lẫn ca; full bags/masks đúng; no patch label propagation. **Chưa xong** |
 | G6 · inner fits/refit | Bundle train/validation → học head | logs/checkpoints/epoch choices | Gradient hữu hạn; encoder SHA không đổi; chỉ inner chọn; resume đúng. **Chưa chạy** |
 | G7 · outer evaluation | Refit weights + outer test → predict một lần | OOF/fold metrics/maps | Mỗi ca đúng fold/model; không tuning outer; báo count/uncertainty. **Chưa chạy** |
 | G8 · báo cáo/export | Tất cả runs → đối chứng và final artifacts | report/model card/weights | Không giấu run lỗi; phân biệt OOF và model refit demo; sources đầy đủ. **Chưa chạy** |
 
-Local đã có 92 tests cho phần raw/processed tooling trước đây. Điều đó không xác nhận adapter precut, feature cache hoặc MIL mới đã được kiểm chứng. Mã mới khi triển khai phải qua pipeline/PR/CI theo AGENTS.md; các lỗi phải tái hiện E2E trước khi sửa.
+Adapter precut đã qua 101 tests local và CI của PR #2. Sáu PNG thật cùng cặp trùng tọa độ đã được kiểm smoke. Những kiểm tra này chưa xác nhận feature cache hoặc MIL, vốn chưa được triển khai. Mã mới khi triển khai phải qua pipeline/PR/CI theo AGENTS.md; các lỗi phải tái hiện E2E trước khi sửa.
 
-Chức năng cũ `colab_training.py` dùng patch-level BCE; kế thừa phần importer/checkpoint phù hợp, không chạy nó như trainer MIL này. `histology_data` hiện chưa có adapter precut/features/MIL. Lỗi `bag_id=slide_group_id` phải sửa hoặc không được dùng trường đó khi xây bag mới; ID cấp ca và cấp ca-lens phải có namespace rõ.
+Chức năng cũ `colab_training.py` dùng patch-level BCE; kế thừa phần importer/checkpoint phù hợp, không chạy nó như trainer MIL này. `histology_data.precut` đã có adapter PNG/ZIP; chưa có encoder features hoặc trainer MIL mới. Lỗi `bag_id=slide_group_id` phải sửa hoặc không được dùng trường đó khi xây bag mới; ID cấp ca và cấp ca-lens phải có namespace rõ.
 
 ## 11. Chạy và lưu ở đâu để thuận tiện trên Colab?
 
-Một notebook điều phối, mount/config/dependencies một lần; CPU và GPU trong cùng runtime. **Drive 5 TB** là storage bền vững, `/content` là scratch mất khi VM bị xóa. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
+Một notebook điều phối, mount/config/dependencies một lần mỗi phiên. Ưu tiên runtime CPU cho đóng gói/kiểm kê/QC; runtime T4 cho encode và train, nhằm dành ngân sách GPU cho tính toán cần GPU. Phiên T4 đã mở hiện tại tiếp tục chuẩn bị nguồn để tránh khởi tạo lại giữa công việc. **Drive 5 TB** là storage bền vững, `/content` là scratch mất khi VM bị xóa. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
 
 ```text
 Drive/histology/
-  source/<source_version>/          25 ZIP, metadata, source manifest
+  source/Metadata.xlsx             metadata đã đối chiếu checksum
+  source/archives/                  ZIP gốc 001 đã truyền thử; không dùng làm release đầy đủ
+  source/archives_from_drive/       25 ZIP đóng lại từ PNG đã duyệt + members/ + commits/ + release.json
+  runtime/                         runtime ZIP, notebook đã cấu hình
+  precut/v001/                     inventory, smoke; parts/ khi chạy full import
   governance/<version>/            patient_map, labels, cohort, outer/inner splits
   encoders/<encoder_id>/           pretrained weights, SHA, preprocess config
   features/<feature_version>/
@@ -337,7 +341,11 @@ Drive/histology/
 /content/feature_cache/            có thể stage toàn cache ~1,22 GB để train
 ```
 
-25 ZIP hiện đã có trên máy dự án; cần đặt bản ZIP bền vững trên Drive trước phiên compute. Drive folder PNG đã có không chứng minh ZIP đã được upload. Notebook import patch là notebooks/Colab_PreCut_Import.ipynb; hướng dẫn tại docs/PRECUT_IMPORT.md. Import chưa tạo feature vectors; encoder/MIL vẫn là bước tiếp theo.
+25 ZIP gốc có trên máy dự án. Phiên Colab `histology-ad841-precut-20261010` của `ad8410552@gmail.com` đã gắn Drive; runtime, metadata và notebook đã lưu trên Drive. Đã đóng lại và kiểm 8 phần trực tiếp từ folder PNG đã duyệt (47.692 PNG). Theo yêu cầu người dùng, tiến trình đã dừng trước khi phần 009 hoàn tất; bản tạm được dọn, 8 commit giữ nguyên. Người dùng tự tải ZIP gốc từ máy lên `source/archives`; phần 001 đã có và đã kiểm SHA, cần thêm 002–025. Thư mục `archives_from_drive` chỉ là nguồn đóng lại chưa đầy đủ, không trộn hai bộ. Các phần đóng lại được đối chiếu từng member với kích thước/CRC của danh mục ZIP gốc, ghi SHA từng PNG và commit từng phần. ZIP đóng lại có SHA khác ZIP gốc; nội dung PNG và đường dẫn member phải giữ nguyên. Release chỉ được coi đủ khi `release.json` có `complete=true`, 25 phần và 148.991 PNG. Notebook trên Drive giữ `ARCHIVE_DIR=source/archives` cho bộ ZIP gốc được người dùng tải lên. Chưa chạy kiểm kê/smoke Colab toàn release, full import hoặc encode. Trước khi chạy, kiểm đúng 25 tên/kích thước ZIP, đối chiếu danh mục member/CRC với manifest nguồn và kiểm checksum/PNG theo từng phần.
+
+Truyền thử ZIP gốc 001 (2.148.242.228 byte) từ máy lên Colab mất **647,489 giây**, khoảng **3,318 MB/s**; thêm **57,367 giây** để lưu/xác minh Drive. Đóng lại phần 002 từ PNG trên Drive với 16 luồng đọc mất **175,444 giây**, thêm **37,825 giây** để lưu/xác minh. Các số này là benchmark I/O, không phải tốc độ CNN. Bằng chứng tại `Results/planning_20261010/colab_setup/`.
+
+Notebook import patch là `notebooks/Colab_PreCut_Import.ipynb`; hướng dẫn tại `docs/PRECUT_IMPORT.md`. Import ghi CRC/SHA/RGB/QC; không cắt, lọc hay đổi màu. Encoder/MIL vẫn là bước tiếp theo.
 
 **Vòng encode:** stage một ZIP, tính/kiểm archive hash khi đọc → đọc PNG từng member, kiểm CRC/SHA/shape → RGB/resize/encoder batches → ghi features/index ra SSD → sync Drive và đọc lại xác minh → commit → dọn scratch → ZIP tiếp. Không giải nén mọi PNG của cohort trên máy cá nhân. Hash/encode có thể kết hợp một lượt đọc cho encoder frozen; global duplicate/coverage gates phải qua trước training.
 
@@ -359,7 +367,9 @@ Mỗi vector lưu float32 cùng tile_id, image_id, case/patient mapping referenc
 | Epoch | Tối đa 30, patience 5 trên inner validation BCE |
 | Seed | 42 cho split/run ban đầu; sampler/RNG được version |
 | RAM | Features trên SSD/CPU; chỉ bag hiện tại trên GPU; không đặt toàn PNG trên RAM |
-| Budget | Đo decode/encode+I/O và một fit trước khi chốt số run trong phiên |
+| Budget | **330 phút T4/profile/ngày theo giới hạn người dùng**; đo decode/encode+I/O và một fit trước khi chốt số run |
+
+**Phân bổ phiên:** dành 30 phút dự phòng ngắt phiên/ghi checkpoint, lên lịch tối đa 300 phút công việc trong ngưỡng 330 phút. Bộ đếm tính từ lúc runtime T4 được tạo, kể cả chờ cấp quyền và tác vụ CPU. Đây là giới hạn lập lịch của dự án, không phải cam kết quota do Google xác nhận. Trước khi bắt đầu phần mới, so sánh thời gian đã dùng + thời gian phần ước tính + dự phòng với ngân sách còn lại. Nếu không đủ thì dừng công việc ở ranh giới commit, ghi `next_part`; không tự giảm dữ liệu hoặc chạy phần mới sát ngưỡng. Việc kết thúc VM thực hiện theo yêu cầu người dùng; chốt công việc không đồng nghĩa VM đã tắt.
 
 Thời gian LAN chuyển PC→máy đã đo **không phải** tốc độ Drive→Colab. Nếu budget không đủ, commit feature parts và chạy số fit phù hợp rồi resume; không bỏ patch/cohort/fold âm thầm. Việc một phiên hoàn thành là mục tiêu, không cam kết của Colab Free.
 
@@ -396,3 +406,4 @@ Số liệu bộ dữ liệu và cache là kiểm kê/tính toán riêng của d
 |---|---|---|
 | 1.0 | 10/10/2026 | Lưu kế hoạch tham chiếu vào docs/plans, kế thừa đầy đủ bản phân tích đã trình bày; bổ sung sơ đồ Mermaid tổng quan, model fusion và train/validation/test. |
 | 1.1 | 10/10/2026 | Cập nhật kết quả kiểm kê ZIP, smoke thật và bộ import precut/Colab; full import/encode/train vẫn chưa chạy. |
+| 1.2 | 10/10/2026 | Gắn Drive đúng tài khoản, đo I/O, giữ 8 ZIP đóng lại đã commit; chuyển sang người dùng tải ZIP gốc 002–025. Phân biệt hai nguồn và ngân sách T4 330 phút/ngày. |

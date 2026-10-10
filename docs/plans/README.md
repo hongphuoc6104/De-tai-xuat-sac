@@ -12,4 +12,4 @@ Các bản render HTML/PNG/SVG và bằng chứng kiểm kê theo ngày được
 
 - `../PRECUT_IMPORT.md`: quy trình và lệnh inventory, smoke, import từng ZIP, audit trùng nội dung.
 - `../../notebooks/Colab_PreCut_Import.ipynb`: notebook Colab preflight và import có thể tiếp tục sau khi ngắt.
-- Trạng thái thực thi mới nhất được ghi trong phiên bản kế hoạch 1.1; phần smoke local chưa có nghĩa là toàn bộ ZIP đã được kiểm byte hoặc đã tạo features.
+- Trạng thái thực thi mới nhất được ghi trong phiên bản kế hoạch 1.2; ghi tài khoản/Drive đã thiết lập, cách chuẩn bị từng phần và ngân sách T4 330 phút/ngày. Trạng thái đầy đủ phụ thuộc source release và audit; chưa có features/train.

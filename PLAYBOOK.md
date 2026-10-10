@@ -93,3 +93,12 @@ Chi tiết đã chuyển vào [.agents/skills/histology-shards/references/failur
 - [ERR-20261009-11] Local pytest wrapper che lỗi import CI: xem histology-shards/references/failures.md.
 
 Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).
+
+
+### [ERR-20261010-03] Báo cáo thời gian giả định commit cũ có trường tùy chọn mới
+- **Triệu chứng (Symptom):** Lệnh thống kê thời gian đóng ZIP trên Colab gặp `KeyError: prefetch_workers`; công việc đóng ZIP vẫn tiếp tục bình thường.
+- **Tái hiện E2E (Reproduction Path):** Chạy `histology_repack_timing_summary.py` trên runtime đã có commit phần 001 từ lệnh benchmark đầu tiên; commit này chưa có trường `prefetch_workers`.
+- **Nguyên nhân cốt lõi (Root Cause):** Helper báo cáo đọc nhiều phiên bản commit vận hành như cùng một schema.
+- **Giả định sai (Wrong Assumptions):** Trường đo tối ưu I/O được coi là bắt buộc ở mọi artifact đã hoàn tất trước đó.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Đọc trường tùy chọn bằng `get`, chỉ tổng hợp nhóm có số luồng được ghi rõ. Chạy lại cùng runtime trả thống kê 6 phần và median 32 luồng 151,585 giây; không sửa commit nguồn hoặc khởi động lại job. Lệnh và kết quả lưu trong `Results/planning_20261010/colab_setup/commands/`.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Tách trường kiểm toàn vẹn bắt buộc khỏi trường đo hiệu năng tùy chọn; không suy diễn giá trị thiếu và không sửa artifact cũ chỉ để báo cáo chạy được.
