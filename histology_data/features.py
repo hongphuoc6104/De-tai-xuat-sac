@@ -577,7 +577,8 @@ def run_feature_extraction(config: FeatureRunConfig, *, encoder: Encoder | None 
                           expected_sources=plan["expected_sources"], available_parts=len(plan["parts"]),
                           source_complete=plan["source_complete"], source_errors=plan["source_errors"])
             if not plan["parts"]:
-                status.update(status="error" if plan["source_errors"] else "awaiting_sources",
+                invalid = any(row.get("status") != "incomplete_upload" for row in plan["source_errors"])
+                status.update(status="error" if invalid else "awaiting_sources",
                               completed_parts=0, committed_vectors=0, finished_at=_utc())
                 atomic_json(root / "status.json", status)
                 writer.emit("run_finished", **status)

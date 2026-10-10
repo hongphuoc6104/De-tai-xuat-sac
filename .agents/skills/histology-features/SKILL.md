@@ -51,3 +51,5 @@ description: Trích vector từ PNG đã duyệt bằng encoder frozen, có ki�
 - **Wrong Assumptions:** Lookup vài nghìn member không ảnh hưởng budget của 149k patch.
 - **Resolution & Proof:** `ZipFile.getinfo()` trên handle đã mở; CRC/size vẫn checked. Source suite qua.
 - **Golden Prevention Rule:** Kiểm directory một lần; payload lookup O(1), bounded read/decode từng batch.
+
+- Upload chưa đủ/ZIP chưa có central directory là `awaiting_sources` khi không có lỗi khác; test `test_only_incomplete_uploads_wait_without_loading_or_calling_encoder` tái hiện `error` trước sửa và qua sau sửa. Không load weights/encoder khi chưa có part hợp lệ. Khi upload đã hoàn tất mà vẫn như vậy, kiểm file nguồn thay vì ép complete.

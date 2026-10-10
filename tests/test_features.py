@@ -340,3 +340,12 @@ def test_global_duplicate_audit_keeps_cross_case_instances_and_reverse_lookup(tm
     assert all(len({row["candidate_case_id"] for row in group["members"]}) == 2 for group in groups)
     assert all(row["row_index"] >= 0 and row["part_id"] and row["source_member"]
                for group in groups for row in group["members"])
+
+
+def test_only_incomplete_uploads_wait_without_loading_or_calling_encoder(tmp_path: Path) -> None:
+    config = fixture(tmp_path, parts=1)
+    (config.source_root / "Tiles-000.zip").write_bytes(b"upload-not-finished")
+    encoder = TinyEncoder()
+    result = run_feature_extraction(config, encoder=encoder)
+    assert result["status"] == "awaiting_sources" and result["feature_id"] is None
+    assert encoder.calls == 0 and result["committed_vectors"] == 0
