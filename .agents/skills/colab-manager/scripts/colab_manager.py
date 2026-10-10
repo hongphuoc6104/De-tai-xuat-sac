@@ -53,7 +53,8 @@ NON_RETRYABLE_ERROR_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SESSION_NOT_FOUND_PATTERN = re.compile(
-    r"(?:\b404\b|\bsession\b.{0,40}\bnot found\b|\bno session\b.{0,40}\b(?:found|exists)\b)",
+    r"(?:\b404\b|\bsession\b.{0,100}\bnot found\b|"
+    r"\bno\s+(?:active\s+)?sessions?\b.{0,40}\b(?:found|exists?)\b)",
     re.IGNORECASE,
 )
 
@@ -933,6 +934,12 @@ def create_session(args: argparse.Namespace) -> int:
         print_command_output(result)
         if result.timed_out:
             status = runner.run(profile.alias, ["status", "--session", session_name], timeout=60)
+            if is_session_missing(status):
+                raise ManagerError(
+                    f"Creation timed out on profile {profile.alias}; Colab reported that session "
+                    f"{session_name} does not exist. No session was tracked and no other profile "
+                    "was tried. Check Colab sessions before retrying."
+                )
             if status.returncode == 0:
                 try:
                     record_created_session(store, profile.alias, session_name, gpu, datetime.now(timezone.utc))
@@ -986,10 +993,10 @@ def connect_session(args: argparse.Namespace) -> int:
         raise ManagerError(f"Tracked session has ended: {session_name}; no replacement VM was created.")
     runner = ColabProfileRunner(args.profile_command)
     status = runner.run(session["profile"], ["status", "--session", session_name], timeout=60)
+    if is_session_missing(status):
+        finish_session(store, session["profile"], session_name, datetime.now(timezone.utc))
+        raise ManagerError(f"Colab session {session_name} no longer exists; no replacement VM was created.")
     if status.returncode != 0:
-        if is_session_missing(status):
-            finish_session(store, session["profile"], session_name, datetime.now(timezone.utc))
-            raise ManagerError(f"Colab session {session_name} no longer exists; no replacement VM was created.")
         raise ManagerError(
             f"Could not verify session {session_name} due to an authentication or network error. "
             "No replacement VM was created."
@@ -1084,11 +1091,11 @@ def poll_tracked_sessions(
             ["status", "--session", session["session"]],
             timeout=60,
         )
-        if result.returncode == 0:
-            continue
         if is_session_missing(result):
             if finish_session(store, session["profile"], session["session"], now):
                 ended.append(session["session"])
+            continue
+        if result.returncode == 0:
             continue
         print(
             f"Timer could not verify {session['profile']}/{session['session']}; "

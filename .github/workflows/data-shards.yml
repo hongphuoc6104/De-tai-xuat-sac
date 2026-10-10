@@ -14,3 +14,4 @@ jobs:
       - run: ruff check .
       - run: python -m compileall -q histology_data scripts tests
       - run: python -m pytest tests/test_data_catalog.py tests/test_data_shards_storage.py tests/test_data_shards_processing.py tests/test_data_shards_cli.py tests/test_data_shards_notebook.py tests/test_medical_guardrails.py
+      - run: python -m pytest tests/test_colab_manager.py

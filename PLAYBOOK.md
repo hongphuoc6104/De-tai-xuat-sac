@@ -61,6 +61,14 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Escape dấu cách của WorkingDirectory= thành \x20, giữ quote riêng cho từng đối số ExecStart; kiểm tra lại unit bằng systemd-analyze --user verify và test hồi quy E2E, cả hai đều pass.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Dùng cú pháp escape theo loại directive của systemd; không áp dụng shell quoting vào giá trị đường dẫn trong unit file.
 
+### [ERR-20261010-01] Colab CLI Trả Mã 0 Cho Phiên Không Còn Tồn Tại
+- **Triệu chứng (Symptom):** `connect` để phiên đã mất ở trạng thái đang chạy; timer tiếp tục tính phút, và kiểm tra sau timeout của `create` có thể ghi nhận phiên không tồn tại là tạo thành công.
+- **Tái hiện E2E (Reproduction Path):** Gọi `colab-profile ad8410552 status --session <tên-test-ngẫu-nhiên>` với một tên chưa tồn tại: CLI trả mã 0 cùng `[colab] Session '<tên>' not found.` hoặc `No active sessions found on server.`. Lặp lại luồng `connect`/`watch` với state và profile registry tạm; hồi quy được giữ tại `tests/test_colab_manager.py`.
+- **Nguyên nhân cốt lõi (Root Cause):** Các consumer chỉ gọi bộ phân loại missing-session sau khi kiểm tra mã thoát khác 0; mẫu nhận diện cũng không khớp thông báo “No active sessions found”.
+- **Giả định sai (Wrong Assumptions):** Mã thoát 0 của lệnh `status` luôn đồng nghĩa phiên còn hoạt động.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Phân loại thông điệp missing bất kể mã thoát, nhận diện tên phiên hợp lệ dài đến 64 ký tự cùng mẫu “no active sessions”, đóng timer interval ở `connect`/poll và từ chối ghi nhận thành công sau timeout khi status báo không có phiên. E2E read-only với CLI thật xác nhận `connect` và poll đều đóng state tạm; 20 test Colab Manager và toàn bộ 96 tests pass. Proof: `Results/proofs/test_evidence_20261010_144242.log`; CI chạy bộ Colab Manager ở bước riêng.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Dựa trên nội dung rõ ràng của phản hồi status để xác định phiên có tồn tại; không suy ra từ mã thoát riêng lẻ.
+
 
 ## V. Bài học đã chuyển thành skill
 
