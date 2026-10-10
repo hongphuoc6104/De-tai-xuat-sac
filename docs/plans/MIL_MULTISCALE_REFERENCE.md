@@ -320,7 +320,7 @@ Chức năng cũ `colab_training.py` dùng patch-level BCE; kế thừa phần i
 
 ## 11. Chạy và lưu ở đâu để thuận tiện trên Colab?
 
-Một notebook điều phối, mount/config/dependencies một lần mỗi phiên. Ưu tiên runtime CPU cho đóng gói/kiểm kê/QC; runtime T4 cho encode và train, nhằm dành ngân sách GPU cho tính toán cần GPU. Phiên T4 đã mở hiện tại tiếp tục chuẩn bị nguồn để tránh khởi tạo lại giữa công việc. **Drive 5 TB** là storage bền vững, `/content` là scratch mất khi VM bị xóa. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
+Một notebook điều phối, mount/config/dependencies một lần mỗi phiên. Ưu tiên runtime CPU cho đóng gói/kiểm kê/QC; runtime T4 cho encode và train, nhằm dành ngân sách GPU cho tính toán cần GPU. Phiên T4 dùng để benchmark chuẩn bị nguồn đã được tắt theo yêu cầu người dùng sau khoảng 67 phút; không giữ GPU trong lúc người dùng tự tải ZIP lên Drive. **Drive 5 TB** là storage bền vững, `/content` là scratch mất khi VM bị xóa. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
 
 ```text
 Drive/histology/
