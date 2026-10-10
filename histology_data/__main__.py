@@ -70,6 +70,36 @@ def _parser() -> argparse.ArgumentParser:
 
     verify = commands.add_parser("verify", help="verify a raw shard release and its contents")
     verify.add_argument("--release", required=True, type=Path)
+
+    precut_inventory = commands.add_parser("precut-inventory", help="index approved patch ZIPs without reading pixels")
+    precut_inventory.add_argument("--metadata", required=True, type=Path)
+    precut_inventory.add_argument("--source", required=True, action="append", type=Path,
+                                  help="approved patch ZIP; repeat for all archives")
+    precut_inventory.add_argument("--output", required=True, type=Path)
+    precut_inventory.add_argument("--lenses", type=int, nargs="+", default=[4, 10, 40])
+
+    precut_smoke = commands.add_parser("precut-smoke", help="decode a few approved patches per lens")
+    precut_smoke.add_argument("--inventory", required=True, type=Path)
+    precut_smoke.add_argument("--output", required=True, type=Path)
+    precut_smoke.add_argument("--per-lens", type=int, default=2)
+
+    precut_import = commands.add_parser("precut-import", help="verify and index patches one ZIP at a time")
+    precut_import.add_argument("--inventory", required=True, type=Path)
+    precut_import.add_argument("--output", required=True, type=Path)
+    precut_import.add_argument("--work-root", type=Path, help="temporary local SSD for one ZIP at a time")
+    precut_import.add_argument("--archive", action="append", help="ZIP basename; may be repeated")
+    precut_import.add_argument("--max-parts", type=int, help="limit new ZIP parts this run")
+
+    precut_verify = commands.add_parser("precut-verify", help="verify an imported ZIP part commit")
+    precut_verify.add_argument("--part", required=True, type=Path)
+
+    precut_audit = commands.add_parser(
+        "precut-audit", help="verify all imported ZIP parts and scan full-release duplicate pixels"
+    )
+    precut_audit.add_argument("--inventory", required=True, type=Path)
+    precut_audit.add_argument("--parts-root", required=True, type=Path)
+    precut_audit.add_argument("--output", required=True, type=Path)
+    precut_audit.add_argument("--work-root", type=Path, help="temporary local SSD for the duplicate index")
     return parser
 
 
@@ -271,6 +301,61 @@ def _verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _precut_inventory(args: argparse.Namespace) -> int:
+    from .precut import build_inventory, write_inventory
+
+    result = build_inventory(args.metadata, args.source, args.lenses)
+    write_inventory(args.output, result)
+    LOGGER.info("Inventory %s: %d ZIPs; patch counts by lens=%s; training_ready=false.",
+                result["inventory_id"], len(result["archives"]), result["coverage"])
+    if result["unmatched_png_count"]:
+        LOGGER.warning("%d PNG entries did not match metadata.", result["unmatched_png_count"])
+    return 0
+
+
+def _precut_smoke(args: argparse.Namespace) -> int:
+    from .io import atomic_json
+    from .precut import inspect_inventory, load_inventory
+
+    result = inspect_inventory(load_inventory(args.inventory), args.per_lens)
+    atomic_json(args.output, result)
+    LOGGER.info("Decoded %d sample patches (%s); training_ready=false.",
+                result["selected_patch_count"], result["selected_by_lens"])
+    return 0
+
+
+def _precut_import(args: argparse.Namespace) -> int:
+    from .precut import import_selected, load_inventory
+
+    result = import_selected(
+        load_inventory(args.inventory), args.output, args.archive, args.max_parts, args.work_root,
+    )
+    LOGGER.info("Import pass: %d new, %d verified existing ZIP parts; training_ready=false.",
+                result["new_parts"], result["reused_parts"])
+    return 0
+
+
+def _precut_verify(args: argparse.Namespace) -> int:
+    from .precut import verify_part
+
+    if not verify_part(args.part):
+        raise ValueError(f"Imported ZIP part is incomplete or has a checksum mismatch: {args.part}")
+    LOGGER.info("Verified imported part %s.", args.part)
+    return 0
+
+
+def _precut_audit(args: argparse.Namespace) -> int:
+    from .precut import audit_import, load_inventory
+
+    result = audit_import(load_inventory(args.inventory), args.parts_root, args.output, args.work_root)
+    LOGGER.info(
+        "Verified %d/%d ZIP parts and %d patch rows; duplicate groups=%s; training_ready=false.",
+        result["verified_zip_parts"], result["expected_zip_parts"],
+        result["verified_patch_rows"], result["exact_duplicate_groups"],
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and keep operational failures concise and nonzero."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -280,7 +365,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _prepare(args)
         if args.command == "process":
             return _process(args)
-        return _verify(args)
+        if args.command == "verify":
+            return _verify(args)
+        if args.command == "precut-inventory":
+            return _precut_inventory(args)
+        if args.command == "precut-smoke":
+            return _precut_smoke(args)
+        if args.command == "precut-import":
+            return _precut_import(args)
+        if args.command == "precut-verify":
+            return _precut_verify(args)
+        if args.command == "precut-audit":
+            return _precut_audit(args)
+        raise ValueError(f"Unsupported command: {args.command}")
     except (OSError, ValueError, KeyError, RuntimeError, json.JSONDecodeError) as exc:
         LOGGER.error("%s", exc)
         return 2

@@ -44,6 +44,24 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 
 ## IV. Nhật Ký Lỗi & Bài Học (Active Error Log)
 
+### [ERR-20261010-01] Smoke precut lấy nhãn đầu tiên nhiều lần thay vì luân phiên lớp
+- **Triệu chứng (Symptom):** Mẫu vài patch mỗi vật kính chỉ chọn case thuộc một nhóm kết luận dù cả hai nhóm có ảnh.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_precut.py::test_precut_smoke_reads_examples_per_lens_and_keeps_case_labels_weak -q`; trước sửa chỉ nhận `YCT26_1` thay vì cả hai case.
+- **Nguyên nhân cốt lõi (Root Cause):** Danh sách case được ghép hết trong một nhóm nhãn trước khi chuyển nhóm; giới hạn mẫu cắt danh sách quá sớm.
+- **Giả định sai (Wrong Assumptions):** Sắp xếp theo nhãn rồi giới hạn được coi là đủ đại diện cho smoke kỹ thuật.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Chọn luân phiên giữa nhóm nhãn và case cho từng vật kính. Test tái hiện và toàn bộ `tests/test_precut.py` qua; smoke thật giữ hai patch mỗi vật kính và hai nhóm nhãn ứng viên.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Khi giới hạn smoke có yếu tố phân nhóm, chọn vòng qua nhóm trước khi áp giới hạn; kiểm tra cả coverage lẫn định danh mẫu.
+
+Chi tiết đã chuyển vào [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).
+
+### [ERR-20261010-02] Notebook Colab import package trước khi giải nén runtime
+- **Triệu chứng (Symptom):** Trạm 2 chạy 98/99 test, nhưng test lint notebook fail vì import sau setup, import trùng giữa cell và nhiều import một dòng.
+- **Tái hiện E2E (Reproduction Path):** `./pipeline station 2`; bằng chứng `Results/proofs/test_evidence_20261010_131312.log` ghi 10 lỗi Ruff trong notebook.
+- **Nguyên nhân cốt lõi (Root Cause):** Notebook load package sau khi cài runtime; Ruff kiểm tra các cell và phát hiện thứ tự/import lặp.
+- **Giả định sai (Wrong Assumptions):** Import sau cài package được coi là ngoại lệ khỏi lint cell.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng `importlib.import_module` sau khi thêm runtime vào đường dẫn, sắp imports và dùng chung symbols giữa cell. Ruff notebook và test Trạm 4 qua; chạy lại toàn bộ station 2.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Lint toàn notebook; import runtime muộn qua importlib và tránh khai báo lại imports giữa các cell.
+
 ### [ERR-20261009-01] Đệ quy Pytest và Nhận diện Thiếu Khuyết Của Phân Tích Cú Pháp AST Trong Trạm 2
 - **Triệu chứng (Symptom):** Khi chạy `pytest tests`, test suite bị treo do test station gọi đệ quy toàn bộ `pytest tests`, đồng thời AST Integrity Check ban đầu coi `with pytest.raises` là test rỗng vì thiếu node `ast.Assert`.
 - **Tái hiện E2E (Reproduction Path):** Chạy `./pipeline run` khi `test_pipeline_stations.py` gọi trực tiếp `run_station_2_tests()`.
