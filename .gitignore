@@ -48,6 +48,7 @@ env/
 /Results/Step1_Overview_results/*.csv
 /Results/Step1_Overview_results/*.log
 /Results/proofs/test_evidence_*.log
+/Results/proofs/feature_*.log
 
 # Local secrets
 .env
