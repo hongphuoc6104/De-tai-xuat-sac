@@ -37,7 +37,7 @@ MyDrive/histology/
 
 ## Chạy trên Colab
 
-Dùng [Colab_PreTrain_Readiness.ipynb](../notebooks/Colab_PreTrain_Readiness.ipynb) hoặc CLI bên dưới. Runtime CPU đủ cho metadata, split, bag và verify; nếu chạy tiếp trong phiên T4 đang encode thì không mở GPU mới. Không nâng cấp Torch/Torchvision/Pillow của encoder đang chạy. Cài dependency thiếu theo `requirements-pretrain.txt`, không dùng cờ upgrade.
+Dùng [Colab_PreTrain_Readiness.ipynb](../notebooks/Colab_PreTrain_Readiness.ipynb) hoặc CLI bên dưới. Runtime CPU đủ cho metadata, split, bag và verify; nếu chạy tiếp trong phiên T4 đang encode thì không mở GPU mới. Khi bootstrap, notebook đọc từng requirement theo cú pháp PEP 508 và so cả module lẫn phiên bản distribution đã cài bằng `importlib.metadata`. Module có thể import được nhưng vẫn phải cài nếu phiên bản không thỏa specifier; ví dụ `sklearn` 1.6.1 không thỏa `scikit-learn==1.8.0`. Package thiếu được cài theo đúng requirement với `pip --no-deps`. Nếu Pillow đã cài nhưng không thỏa specifier, notebook dừng và báo cần chạy trên runtime mới có Pillow tương thích thay vì nâng Pillow đang dùng; Pillow chỉ được cài riêng nếu còn thiếu. Torch và torchvision không bao giờ được cài hoặc nâng cấp bởi bootstrap. Nếu package đã đúng phiên bản, notebook giữ nguyên và bỏ qua pip.
 
 Sau giải nén runtime và thêm vào PYTHONPATH, kiểm kê nhẹ để tạo mẫu review:
 

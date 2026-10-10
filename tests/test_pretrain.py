@@ -15,6 +15,7 @@ import pandas as pd
 import pytest
 from PIL import Image
 
+from histology_data import readiness as readiness_module
 from histology_data.bags import load_case_features
 from histology_data.feature_encoder import FEATURE_DIM, OFFICIAL_WEIGHTS_SHA256, WEIGHTS_ENUM
 from histology_data.features import BudgetExhausted, FeatureRunConfig, run_feature_extraction
@@ -36,8 +37,11 @@ from histology_data.readiness import (
     verify_pretrain_bundle,
 )
 from histology_data.splits import (
+    SUPPORTED_SPLITTER_VERSION,
     SplitError,
     create_nested_patient_splits,
+    require_supported_splitter_version,
+    validate_split_structure,
 )
 
 V1_TRANSFORM = {
@@ -233,6 +237,74 @@ def test_nested_split_e2e_reproduces_and_fixes_mixed_case_patient_groups() -> No
         assert all({0, 1} == {case["case_label"] for case in cases if case["case_id"] in side}
                    for side in (outer["train_cases"], outer["test_cases"]))
     assert create_nested_patient_splits(cases, seed=42) == splits
+
+
+@pytest.mark.parametrize(
+    ("name", "class_counts", "group_order_labels"),
+    [
+        ("all18", (10, 8), "100110110001010010"),
+        ("common16", (9, 7), "0100010100110110"),
+    ],
+)
+def test_one_case_patient_groups_remain_stratified_after_sgkf_shuffle_fix(
+    name: str, class_counts: tuple[int, int], group_order_labels: str,
+) -> None:
+    """Regression for sklearn 1.6.1 shuffled group-index mismatch, at seed 42."""
+    require_supported_splitter_version()
+    negative_count, positive_count = class_counts
+    assert len(group_order_labels) == negative_count + positive_count
+    assert group_order_labels.count("0") == negative_count
+    assert group_order_labels.count("1") == positive_count
+
+    patients = [f"{name}-patient-{index:02d}" for index in range(len(group_order_labels))]
+    ordered_patients = sorted(patients, key=lambda patient: fingerprint([patient])[:20])
+    labels_by_patient = dict(zip(ordered_patients, map(int, group_order_labels), strict=True))
+    cases = [
+        {"case_id": f"{name}-case-{index:02d}", "patient_id": patient,
+         "case_label": labels_by_patient[patient]}
+        for index, patient in enumerate(patients)
+    ]
+
+    splits = create_nested_patient_splits(cases, seed=42)
+    assert splits["splitter_version"] == SUPPORTED_SPLITTER_VERSION
+    assert create_nested_patient_splits(cases, seed=42) == splits
+    validate_split_structure(splits, cases)
+
+    labels_by_case = {case["case_id"]: case["case_label"] for case in cases}
+    for outer in splits["outer"]:
+        assert {labels_by_case[case_id] for case_id in outer["test_cases"]} == {0, 1}
+        assert {labels_by_case[case_id] for case_id in outer["train_cases"]} == {0, 1}
+        assert not set(outer["test_patients"]) & set(outer["train_patients"])
+        for inner in outer["inner_folds"]:
+            assert {labels_by_case[case_id] for case_id in inner["validation_cases"]} == {0, 1}
+            assert {labels_by_case[case_id] for case_id in inner["train_cases"]} == {0, 1}
+            assert not set(inner["validation_patients"]) & set(inner["train_patients"])
+
+
+def test_unsupported_splitter_version_fails_with_install_guidance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from histology_data import splits as splits_module
+
+    monkeypatch.setattr(splits_module.sklearn, "__version__", "1.6.1")
+    with pytest.raises(SplitError, match="require scikit-learn==1[.]8[.]0.*Install with.*pip install --no-deps"):
+        require_supported_splitter_version()
+
+
+def test_bundle_builder_checks_splitter_before_full_feature_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unsupported() -> str:
+        raise SplitError("synthetic incompatible scikit-learn version")
+
+    def unexpected_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pytest.fail("Version gate must run before the full feature audit.")
+
+    monkeypatch.setattr(readiness_module, "require_supported_splitter_version", unsupported)
+    monkeypatch.setattr(readiness_module, "inspect_feature_release", unexpected_audit)
+    with pytest.raises(SplitError, match="synthetic incompatible"):
+        readiness_module.build_pretrain_bundle(
+            tmp_path / "not-read-governance.json", tmp_path / "not-audited-features", tmp_path / "output",
+        )
+    assert not (tmp_path / "output").exists()
 
 
 def test_full_feature_to_common_and_all_bundle_e2e_roundtrip(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ from .io import file_hash, fingerprint
 from .splits import (
     SplitError,
     create_nested_patient_splits,
+    require_supported_splitter_version,
     validate_split_structure,
 )
 
@@ -653,6 +654,7 @@ def build_pretrain_bundle(
     deadline: float | None = None,
 ) -> dict[str, Any]:
     """Build a versioned case×lens bundle or publish explicit readiness blockers."""
+    require_supported_splitter_version()
     _check_deadline(deadline)
     if cohort_mode not in {"common", "all"}:
         raise ValueError("cohort_mode must be 'common' or 'all'.")

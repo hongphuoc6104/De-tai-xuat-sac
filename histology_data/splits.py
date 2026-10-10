@@ -11,10 +11,23 @@ from sklearn.model_selection import StratifiedGroupKFold
 from .io import fingerprint
 
 LABELS = (0, 1)
+SUPPORTED_SPLITTER_VERSION = "1.8.0"
 
 
 class SplitError(ValueError):
     """A nested patient-grouped split cannot satisfy the locked protocol."""
+
+
+def require_supported_splitter_version() -> str:
+    """Fail closed unless the tested StratifiedGroupKFold implementation is installed."""
+    installed = str(sklearn.__version__)
+    if installed != SUPPORTED_SPLITTER_VERSION:
+        raise SplitError(
+            f"Nested patient splits require scikit-learn=={SUPPORTED_SPLITTER_VERSION}; found {installed}. "
+            "Older StratifiedGroupKFold(shuffle=True) versions mis-map shuffled group labels. "
+            f"Install with `python -m pip install --no-deps scikit-learn=={SUPPORTED_SPLITTER_VERSION}` and retry."
+        )
+    return installed
 
 
 class _UnionFind:
@@ -146,6 +159,7 @@ def create_nested_patient_splits(
     inner_folds: int = 2,
 ) -> dict[str, Any]:
     """Create 3x2 grouped CV or fail closed without removing patients/cases."""
+    require_supported_splitter_version()
     if not cases:
         raise SplitError("Cannot split an empty cohort.")
     case_ids = [str(case.get("case_id", "")) for case in cases]

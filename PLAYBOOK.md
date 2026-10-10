@@ -123,3 +123,12 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Quy tắc phòng ngừa vàng (Golden Rule):** E2E giữ derived defaults của notebook; override chỉ những input môi trường cần thiết, không sửa giá trị muốn kiểm.
 
 - [ERR-20261010-09,11,12] Split mixed-label patients, bag persistence contract và CLI constant ownership: xem [.agents/skills/histology-pretrain/references/failures.md](.agents/skills/histology-pretrain/references/failures.md).
+- [ERR-20261011-01] scikit-learn 1.6.1 làm sai stratification khi shuffle nhóm; xem [.agents/skills/histology-pretrain/references/failures.md](.agents/skills/histology-pretrain/references/failures.md).
+
+### [ERR-20261011-02] Test cảnh báo Colab phụ thuộc thời điểm chạy trong ngày
+- **Triệu chứng (Symptom):** `test_watch_notifies_without_stopping_an_active_vm` không tạo `notification-calls.jsonl` khi chạy ngay sau nửa đêm giờ Việt Nam.
+- **Tái hiện E2E (Reproduction Path):** `python3 -m pytest -q tests/test_colab_manager.py::test_watch_notifies_without_stopping_an_active_vm`; trước sửa, session bắt đầu 345 phút trước thời điểm chạy nên khoảng thời gian bị cắt tại nửa đêm địa phương và không chạm cảnh báo 350 phút.
+- **Nguyên nhân cốt lõi (Root Cause):** Bộ đếm chỉ cộng runtime trong ngày Asia/Ho_Chi_Minh; thời lượng test tương đối với đồng hồ hiện tại có thể bắt đầu từ ngày địa phương trước.
+- **Giả định sai (Wrong Assumptions):** Lùi đồng hồ 345 phút luôn tạo 345 phút runtime trong ngày được bộ đếm tính.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng `local_day_bounds(now)` làm thời điểm bắt đầu và ngân sách profile cô lập một phút để cảnh báo có thể đạt ở mọi giờ. Test tái hiện pass sau sửa; toàn bộ `tests/test_colab_manager.py` pass 16 tests. Station 2 xác nhận test này pass; các lỗi còn lại của lần chạy đó thuộc pretrain do scikit-learn cài đặt là 1.9.0 trong khi mã yêu cầu 1.8.0.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Test bộ đếm theo ngày phải tạo timestamp và budget theo ranh giới lịch mà implementation sử dụng, không giả định thời lượng runtime vượt qua nửa đêm vẫn được tính trong cùng ngày.

@@ -446,19 +446,98 @@ def test_draft_and_unknown_cli_status_never_claim_training_ready() -> None:
     assert unknown["training_ready"] is False
 
 
-def test_runtime_requirements_only_install_missing_modules_and_refuse_torch(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_requirements_keep_compatible_distributions_and_refuse_torch(tmp_path: Path, monkeypatch) -> None:
     _, namespace = _runtime_namespace()
     runtime_root = tmp_path / "runtime"
     runtime_root.mkdir()
     requirements = runtime_root / "requirements-pretrain.txt"
-    requirements.write_text("Pillow>=10\nnumpy>=999\n", encoding="utf-8")
+    requirements.write_text("Pillow>=10\nnumpy>=1.24\n", encoding="utf-8")
     monkeypatch.setattr(importlib.util, "find_spec", lambda name, package=None: object())
+    installed_versions = {"pillow": "10.4.0", "numpy": "2.1.3"}
+    monkeypatch.setattr(namespace["importlib_metadata"], "version", lambda name: installed_versions[name])
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("present modules must not be reinstalled"))
     assert namespace["install_missing_runtime_requirements"](runtime_root) == []
 
     requirements.write_text("torch>=2.6\n", encoding="utf-8")
     with pytest.raises(ValueError, match="must not install PyTorch or torchvision"):
         namespace["install_missing_runtime_requirements"](runtime_root)
+
+
+def test_runtime_requirements_fail_closed_for_incompatible_installed_pillow(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, namespace = _runtime_namespace()
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "requirements-pretrain.txt").write_text("Pillow>=10\n", encoding="utf-8")
+    module_spec = importlib.machinery.ModuleSpec("PIL", loader=None)
+    monkeypatch.setattr(namespace["importlib_util"], "find_spec", lambda name: module_spec if name == "PIL" else None)
+    monkeypatch.setattr(namespace["importlib_metadata"], "version", lambda name: "9.5.0")
+    installer_calls = []
+
+    def capture_install(command, **kwargs):
+        installer_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", capture_install)
+    with pytest.raises(ValueError, match="Installed Pillow version 9.5.0.*Pillow>=10.*refusing to replace Pillow in-place"):
+        namespace["install_missing_runtime_requirements"](runtime_root)
+
+    assert installer_calls == []
+
+
+def test_runtime_requirements_can_install_missing_pillow_without_dependencies(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, namespace = _runtime_namespace()
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "requirements-pretrain.txt").write_text("Pillow>=10\n", encoding="utf-8")
+    monkeypatch.setattr(namespace["importlib_util"], "find_spec", lambda name: None)
+
+    def missing_distribution(name):
+        raise namespace["importlib_metadata"].PackageNotFoundError(name)
+
+    monkeypatch.setattr(namespace["importlib_metadata"], "version", missing_distribution)
+    installer_calls = []
+
+    def capture_install(command, **kwargs):
+        installer_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", capture_install)
+    missing = namespace["install_missing_runtime_requirements"](runtime_root)
+
+    assert missing == ["pillow"]
+    assert len(installer_calls) == 1
+    assert installer_calls[0][-2:] == ["--no-deps", "Pillow>=10"]
+
+
+def test_runtime_requirement_reinstalls_present_module_when_installed_version_is_incompatible(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    _, namespace = _runtime_namespace()
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "requirements-pretrain.txt").write_text("scikit-learn==1.8.0\n", encoding="utf-8")
+    module_spec = importlib.machinery.ModuleSpec("sklearn", loader=None)
+    monkeypatch.setattr(namespace["importlib_util"], "find_spec", lambda name: module_spec if name == "sklearn" else None)
+    monkeypatch.setattr(
+        namespace["importlib_metadata"], "version",
+        lambda name: "1.6.1" if name == "scikit-learn" else pytest.fail(f"unexpected distribution lookup: {name}"),
+    )
+    installer_calls = []
+
+    def capture_install(command, **kwargs):
+        installer_calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", capture_install)
+    missing = namespace["install_missing_runtime_requirements"](runtime_root)
+
+    assert missing == ["scikit-learn"]
+    assert len(installer_calls) == 1
+    assert installer_calls[0][-2:] == ["--no-deps", "scikit-learn==1.8.0"]
 
 
 def test_notebook_does_not_train_or_control_the_colab_vm() -> None:

@@ -21,6 +21,7 @@ from histology_data.feature_encoder import FEATURE_DIM, OFFICIAL_WEIGHTS_SHA256,
 from histology_data.features import FeatureRunConfig, run_feature_extraction
 from histology_data.governance import create_case_review_draft, write_case_review_draft
 from histology_data.io import file_hash
+from histology_data.splits import SplitError
 from scripts.run_pretrain_colab import (
     RunnerError,
     RunnerLock,
@@ -223,6 +224,47 @@ def _write_config(fixture: dict[str, Any], config_path: Path) -> Path:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return config_path
+
+
+@pytest.mark.parametrize("mode", ["auto", "build"])
+def test_runner_rejects_incompatible_splitter_before_pretrain_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    fixture = _fixture(tmp_path / "drive", make_features=False)
+    _write_confirmation(fixture)
+    config_path = _write_config(fixture, tmp_path / "config.json")
+
+    def reject_version() -> str:
+        raise SplitError(
+            "Nested patient splits require scikit-learn==1.8.0; found 1.6.1. "
+            "Install with `python -m pip install --no-deps scikit-learn==1.8.0` and retry."
+        )
+
+    def unexpected_work(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Incompatible splitter must fail before governance or feature work.")
+
+    monkeypatch.setattr(runner_module, "require_supported_splitter_version", reject_version)
+    monkeypatch.setattr(runner_module, "_create_review_and_governance", unexpected_work)
+    monkeypatch.setattr(runner_module, "_require_feature_ready_now", unexpected_work)
+    with pytest.raises(RunnerError, match="require scikit-learn==1[.]8[.]0.*Install with.*pip install"):
+        run_pretrain(config_path, mode=mode, deadline_utc=_deadline())
+    assert not (fixture["drive_root"] / "pretrain_runs").exists()
+
+
+def test_draft_mode_does_not_require_the_supported_splitter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(tmp_path / "drive", make_features=False)
+    _write_confirmation(fixture)
+    config_path = _write_config(fixture, tmp_path / "config.json")
+
+    def unexpected_version_check() -> str:
+        pytest.fail("Draft generation does not run nested patient splits.")
+
+    monkeypatch.setattr(runner_module, "require_supported_splitter_version", unexpected_version_check)
+    result = run_pretrain(config_path, mode="draft")
+    assert result["status"] == "draft_ready"
+    assert result["source_complete"] is True
 
 
 def _deadline(seconds: int = 3600) -> str:

@@ -41,6 +41,7 @@ from histology_data.readiness import (  # noqa: E402
     build_pretrain_bundle,
     verify_pretrain_bundle,
 )
+from histology_data.splits import SplitError, require_supported_splitter_version  # noqa: E402
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _RUNNER_LOCK_NAME = "runner.lock"
@@ -1062,6 +1063,12 @@ def run_pretrain(
     else:
         deadline = _timestamp(deadline_utc) if deadline_utc else None
     config = load_config(Path(config_path))
+    splitter_version: str | None = None
+    if mode in {"auto", "build"}:
+        try:
+            splitter_version = require_supported_splitter_version()
+        except SplitError as exc:
+            raise RunnerError(str(exc)) from exc
     monotonic_deadline: float | None = None
     if deadline is not None:
         remaining_seconds = max(0.0, (deadline - now_fn().astimezone(dt.timezone.utc)).total_seconds())
@@ -1082,6 +1089,8 @@ def run_pretrain(
     lock = RunnerLock(run_root / _RUNNER_LOCK_NAME, run_id, recover_stale_runner_lock)
     with lock:
         state = RunState(run_dir, run_id, mode, config)
+        if splitter_version is not None:
+            state.save(splitter_version=splitter_version)
         if deadline is not None:
             state.save(profile_deadline_utc=_utc_text(deadline))
         if lock.recovered:
