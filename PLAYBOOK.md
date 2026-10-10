@@ -104,3 +104,22 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Tách trường kiểm toàn vẹn bắt buộc khỏi trường đo hiệu năng tùy chọn; không suy diễn giá trị thiếu và không sửa artifact cũ chỉ để báo cáo chạy được.
 
 - [ERR-20261010-04..07] Feature integrity/resume, budget/completeness, cold notebook và ZIP lookup: xem [.agents/skills/histology-features/SKILL.md](.agents/skills/histology-features/SKILL.md).
+
+
+### [ERR-20261010-08] Hai kết nối SSH đồng thời bị Colab từ chối
+- **Triệu chứng (Symptom):** Kết nối rsync thứ hai trả HTTP429 Already-active SSH session; lần truyền thứ nhất vẫn thành công.
+- **Tái hiện E2E (Reproduction Path):** Hai lệnh rsync tới cùng VM histology-features-resume-20261010 chạy chồng nhau khi tải các artifact review; shell session26741 trả255, session65589 hoàn tất.
+- **Nguyên nhân cốt lõi (Root Cause):** SSH endpoint của runtime chỉ cho một kết nối active tại một thời điểm; các file đích khác nhau không làm kết nối trở thành độc lập.
+- **Giả định sai (Wrong Assumptions):** Upload các file khác nhau qua SSH có thể song song như file API.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Chờ kết nối đầu đóng rồi chạy lại rsync thứ hai; session76582 exit0. Không dừng VM/encoder hoặc thay key. Xác nhận artifacts nhỏ trên Drive sau transfer.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Mỗi Colab endpoint chỉ mở một SSH; thao tác nhiều file trong một lượt hoặc dùng file API cho artifact nhỏ, tránh in proxy URL khi backend trả lỗi.
+
+### [ERR-20261010-10] Test ghi đè derived defaults làm che đường dẫn notebook sai
+- **Triệu chứng (Symptom):** Notebook tìm runtime/runtime thay vì runtime; build dùng thêm pretrain dù builder tự nối bundles.
+- **Tái hiện E2E (Reproduction Path):** Actual config/helper/main cells chỉ bind ROOT và expectedSHA vào fixture có ZIP ởROOT/runtime; before trace `Results/proofs/pretrain_notebook_defaults_repro_20261010.json`.
+- **Nguyên nhân cốt lõi (Root Cause):** Default folder bị nối hai lần; test helper ghi đè RUNTIME_ZIP/BUNDLE_OUTPUT_ROOT nên không kiểm derivation thực tế.
+- **Giả định sai (Wrong Assumptions):** Kiểm wrapper sau khi thay mọi đường dẫn tương đương chạy cấu hình người dùng.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Một runtime segment, build output-rootROOT; tests dùng actual defaults với ROOT/SHA binding, actual CLI draft E2E và17 notebook tests qua.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** E2E giữ derived defaults của notebook; override chỉ những input môi trường cần thiết, không sửa giá trị muốn kiểm.
+
+- [ERR-20261010-09,11,12] Split mixed-label patients, bag persistence contract và CLI constant ownership: xem [.agents/skills/histology-pretrain/references/failures.md](.agents/skills/histology-pretrain/references/failures.md).

@@ -1,17 +1,17 @@
 # Kế hoạch dự án
 
-Thư mục này lưu kế hoạch tham chiếu để phát triển, theo dõi tiến độ và đối chiếu kết quả. Tài liệu phân biệt thiết kế dự kiến với phần đã thực thi; các thay đổi được ghi theo phiên bản.
+Thư mục này lưu kế hoạch tham chiếu và lộ trình trước huấn luyện MIL. Các tài liệu phân biệt dữ kiện đã xác nhận, tác vụ đang chạy và đề xuất chưa thực hiện.
 
 ## Kế hoạch hiện tại
 
-- `MIL_MULTISCALE_REFERENCE.md`: kế hoạch phân loại mô học tuyến tiền liệt bằng MIL ở 4×, 10×, 40×; gồm dữ liệu, pretrained/freeze, features, bags, train/validation/test, đánh giá, lưu trữ Colab và các trạm giám sát.
+- [`MIL_MULTISCALE_REFERENCE.md`](MIL_MULTISCALE_REFERENCE.md): kế hoạch phân loại mô học tuyến tiền liệt bằng MIL ở 4×, 10×, 40×; gồm dữ liệu, encoder pretrained/frozen, features, bags, protocol và đánh giá dự kiến.
+- [`PRETRAIN_EXECUTION.md`](PRETRAIN_EXECUTION.md): lộ trình G0–G5 và readiness audit trước MIL, cùng đường dẫn, đầu vào/đầu ra và trạng thái hiện tại. Không bao gồm huấn luyện MIL.
 
-Các bản render HTML/PNG/SVG và bằng chứng kiểm kê theo ngày được lưu trong `Results/planning_20261010/`. Bản tham chiếu chính nằm trong thư mục này.
+Bằng chứng kiểm kê và hình minh họa được lưu trong `Results/planning_20261010/`.
 
-## Tài liệu triển khai dữ liệu patch đã duyệt
+## Dữ liệu patch và extractor
 
-- `../PRECUT_IMPORT.md`: quy trình và lệnh inventory, smoke, import từng ZIP, audit trùng nội dung.
-- `../../notebooks/Colab_PreCut_Import.ipynb`: notebook Colab preflight và import có thể tiếp tục sau khi ngắt.
-- Trạng thái thực thi mới nhất được ghi trong phiên bản kế hoạch 1.3; ghi tài khoản/Drive đã thiết lập, cách chuẩn bị từng phần và ngân sách T4 330 phút/ngày. Trạng thái đầy đủ phụ thuộc source release và audit; chưa có features/train.
+- [`../PRECUT_IMPORT.md`](../PRECUT_IMPORT.md) và [`../../notebooks/Colab_PreCut_Import.ipynb`](../../notebooks/Colab_PreCut_Import.ipynb): inventory, smoke, import và audit dữ liệu patch đã duyệt.
+- [`../FEATURE_EXTRACTION.md`](../FEATURE_EXTRACTION.md) và [`../../notebooks/Colab_Feature_Extraction.ipynb`](../../notebooks/Colab_Feature_Extraction.ipynb): extractor ResNet50 ImageNet V1 frozen chạy theo ZIP hoặc thư mục PNG.
 
-- `../FEATURE_EXTRACTION.md` và `../../notebooks/Colab_Feature_Extraction.ipynb`: extractor ResNet50 frozen tự chạy theo ZIP/nhóm PNG; CPU smoke đã qua, production T4 vẫn cần chạy.
+Hiện Drive có đủ 25/25 ZIP. Smoke T4 đã tạo sáu vector thật và hoàn tất trong 112,616 giây. Production writer `histology-features-resume-20261010` vẫn chạy với source plan 24 ZIP/142.791 PNG; sau khi lượt này kết thúc, cần resume để inventory ZIP thứ 25. Full feature cache và audit chưa hoàn tất. Governance, split và bag tooling đang được phát triển; chưa có bundle đã kiểm toán và chưa huấn luyện MIL.

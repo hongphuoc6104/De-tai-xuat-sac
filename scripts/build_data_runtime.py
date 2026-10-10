@@ -16,6 +16,10 @@ RUNTIME_FILES = (
     "docs/FEATURE_EXTRACTION.md",
     "requirements-features.txt",
     "configs/features_colab.json",
+    "requirements-pretrain.txt",
+    "docs/PRETRAIN_READINESS.md",
+    "configs/pretrain_colab.json",
+    "scripts/run_pretrain_colab.py",
     "configs/data_shards_smoke.json",
     "configs/data_shards_colab.json",
 )

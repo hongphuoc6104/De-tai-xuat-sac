@@ -2,13 +2,13 @@
 
 > **Vai trò tài liệu:** bản tham chiếu chính để phát triển và giám sát dự án. Số liệu và hiện trạng là snapshot ngày 10/10/2026. Các thông số mô hình/CV là thiết kế dự kiến, chưa phải kết quả thực thi. Khi thay đổi thiết kế hoặc chốt thông tin dữ liệu, cập nhật phiên bản và ghi lý do ở lịch sử thay đổi.
 
-**Phiên bản kế hoạch 1.3 · 10/10/2026.** Đây là thiết kế dự kiến để giám sát và triển khai; chưa có kết quả train hoặc benchmark encoder/MIL. Đã đo truyền dữ liệu và đóng gói trên runtime T4; những tác vụ này dùng CPU/I/O.
+**Phiên bản kế hoạch 1.4 · 10/10/2026.** Đây là thiết kế dự kiến để giám sát và triển khai; chưa có kết quả huấn luyện hoặc đánh giá MIL. Smoke feature encoder trên T4 đã qua, còn production extraction và full feature audit đang chạy. Các phép đo truyền dữ liệu và đóng gói dưới đây là benchmark I/O, không phải thời gian chạy encoder hay mô hình MIL.
 
 **Quyết định vòng đầu:** dùng patch đã được duyệt → tải ResNet50 đã pretrain → đóng băng encoder và tạo feature cache một lần → train mô hình MIL cấp ca → so sánh 4×, 10×, 40× và fusion trên cùng cohort/fold. Mọi xử lý đầy đủ và tác vụ dài chạy trên Colab; local chỉ kiểm kê nhẹ và thử vài mẫu nhỏ khi phát triển.
 
 ## 1. Mục tiêu và những gì thực sự đã có
 
-Mục tiêu đầu tiên là dự đoán **ca lành tính hay ca có ung thư** từ tập ảnh mô học của ca đó. Nhãn dự kiến lấy từ kết luận bệnh học đã được xác nhận. Không tự đổi `Glade` thành ISUP Grade Group và không gán nhãn ca dương thành nhãn ung thư cho mọi patch.
+Mục tiêu đầu tiên là dự đoán **ca lành tính hay ca có ung thư** từ tập ảnh mô học của ca đó. Quy tắc nhị phân đã được người dùng xác nhận: ca có `CARCINOM` là 1, kể cả ca hỗn hợp; chỉ tăng sản lành tính, có hoặc không có viêm, là 0. Giữ nguyên trường `Glade` nhưng không dùng trường này cho endpoint nhị phân, không suy ra ISUP Grade Group và không gán nhãn ca cho từng patch.
 
 | Dữ liệu đã kiểm kê | 4× | 10× | 40× | Tổng |
 |---|---:|---:|---:|---:|
@@ -17,15 +17,15 @@ Mục tiêu đầu tiên là dự đoán **ca lành tính hay ca có ung thư** 
 
 - 25 ZIP độc lập, tổng 53,31 GB, đã sao chép về máy này; bản trên PC vẫn được giữ.
 - Cả 1.812 tên ảnh nguồn khớp metadata. Không trùng **đường dẫn** patch giữa các ZIP; chưa kết luận không trùng **nội dung** ảnh.
-- Có 18 mã ca ứng viên. Dựa trên kết luận hiện tại: 10 ca ứng viên lành, 8 ca ứng viên ung thư; nhãn vẫn cần xác nhận cho task mới.
-- Cohort có đủ ba vật kính gồm 16 mã ca ứng viên: 9 lành, 7 ung thư. Một ca thiếu 4×, một ca chỉ có 40×.
-- 18 mã ca chưa chứng minh là 18 người độc lập. `patient_id` phải được xác minh trước scientific training/evaluation.
+- Release có 18 mã ca, tương ứng 18 người bệnh khác nhau theo xác nhận của người dùng. Nhãn nhị phân đã xác nhận gồm 10 ca lành và 8 ca có ung thư; bằng chứng người dùng và bảng rà soát có 18 pseudonym.
+- Cohort chính đủ cả ba vật kính gồm 16 ca: 9 lành, 7 có ung thư. Cohort phụ gồm cả 18 ca; một ca thiếu 4×, một ca chỉ có 40×. Giữ mask lens thiếu thay vì tạo dữ liệu giả.
+- Rà soát 12 báo cáo không phát hiện xung đột với nhãn nhị phân đã xác nhận. Danh sách ca canonical có đúng 18 ca, không có xung đột với mã ca thứ 19. Các artifact governance có phiên bản và kiểm tra vẫn đang được xây dựng; danh tính mới ngoài release không được suy ra từ tên ca.
 - Hai PNG mẫu đã xem có preview 512×512. Script cũ mặc định crop 512, stride 256. Import phải ghi kích thước thực và đối chiếu log; không khẳng định toàn release cùng cấu hình chỉ từ hai mẫu.
-- Bộ kiểm kê ZIP mới đối chiếu đủ 148.991 tên patch với metadata. Smoke giải mã 6 patch thật, hai mỗi vật kính. Một file 768_1280(1).png trùng byte và pixel với patch cùng tọa độ; cả hai được giữ và đánh dấu review. Đây chưa phải kiểm checksum/giải mã toàn release.
-- Đã kiểm danh mục ZIP và việc chuyển file; chưa kiểm CRC, giải mã và checksum từng PNG toàn release. Việc này chạy trên Colab.
+- Bộ kiểm kê ZIP đối chiếu đủ 148.991 tên patch với metadata; cả 1.812 ảnh nguồn trong release đều khớp metadata. Smoke T4 giải mã sáu patch thật, hai mỗi vật kính; tạo sáu vector hữu hạn. Một file `768_1280(1).png` trùng byte và pixel với patch cùng tọa độ; giữ cả hai và đưa vào audit duplicate. Đây chưa phải kiểm checksum/giải mã toàn release.
+- Drive đã có đủ 25/25 ZIP. ZIP021 có 6.200 PNG, kích thước 2.148.335.383 byte, CRC toàn ZIP hợp lệ và SHA-256 `1fd92c47ad46f03534da909c0928cb35254eab52f0158697cc833032e5fe96fb`. Production invocation hiện tại vẫn dùng source plan 24 ZIP/142.791 PNG; sau lượt này cần resume với plan 25. Full feature cache và audit chưa hoàn tất.
 - Master metadata có 2.802 ảnh, release hiện có patch của 1.812 ảnh. 990 ảnh còn lại không được tự coi là dữ liệu train bị thiếu cần làm lại; ghi coverage và rà lý do chúng không có trong bộ đã duyệt.
 
-Bằng chứng kiểm kê được lưu trong `Results/planning_20261010/`: `precut_archive_inventory.json`, `precut_source_images.csv`, `transfer_summary.json`. Bản HTML và các PNG/SVG minh họa cũng nằm tại đó. Source Drive: [Tiles đã duyệt](https://drive.google.com/drive/folders/1eOMrTFilpkHqbFfy_72qTYuiqLxMSg-Z).
+Bằng chứng kiểm kê được lưu trong `Results/planning_20261010/`: `precut_archive_inventory.json`, `precut_source_images.csv`, `transfer_summary.json`. Xác nhận người dùng và rà soát ca được lưu trong `Results/planning_20261010/pretrain/user_confirmation.json` và `case_review_confirmed.csv`. Bản HTML và hình minh họa kiểm kê cũng nằm trong `Results/planning_20261010/`. Source Drive: [Tiles đã duyệt](https://drive.google.com/drive/folders/1eOMrTFilpkHqbFfy_72qTYuiqLxMSg-Z).
 
 **Giới hạn thực tế:** 148.991 patch là số đơn vị tính toán; số người độc lập mới quyết định sức mạnh của đánh giá. Bác sĩ duyệt chất lượng giúp kế thừa lựa chọn ảnh, nhưng không thay việc kiểm file khi nhập hoặc xác minh cấp nhãn/định danh.
 
@@ -134,9 +134,9 @@ Freeze đúng gồm `requires_grad=False`, `eval()` và không cập nhật Batc
 
 ## 5. Đường đi của một patch và các lựa chọn màu
 
-**PNG nguồn → kiểm/đọc RGB → resize toàn patch thành 224×224 → pixel [0,1] và normalize theo weights → CNN frozen → global average pooling → 2.048 số.** Tọa độ x/y vẫn thuộc ảnh nguồn, không đổi sang hệ 224.
+**PNG nguồn → kiểm/đọc RGB → resize cạnh ngắn 256 → center-crop 224×224 → pixel [0,1] và normalize theo weights → CNN frozen → global average pooling → 2.048 số.** Tọa độ x/y vẫn thuộc ảnh nguồn, không đổi sang hệ 224.
 
-Thiết kế chủ động giữ toàn vùng patch khi resize, để không tự cắt bỏ mô ở rìa. Đây là preprocessing custom có version: transform chuẩn V1 của Torchvision resize cạnh ngắn 256 rồi center crop 224. Mình dùng cùng mean/std nhưng phải ghi rõ khác biệt resize này trong thí nghiệm; không nói đang dùng nguyên `weights.transforms()`.
+**Quyết định v1.4:** baseline dùng nguyên `IMAGENET1K_V1.transforms()` của Torchvision, khớp extractor đang chạy và feature fingerprint. Resize cạnh ngắn 256 rồi center-crop 224 bỏ một phần rìa ở tensor encoder; PNG nguồn được giữ nguyên. Điều này thay đề xuất custom resize toàn patch ở v1.3; không coi hai preprocessing tương đương. Nếu muốn so sánh giữ toàn patch sau này, tạo một feature version riêng, không trộn vào cache control hiện tại.
 
 Kích thước pixel không phải kích thước vật lý. Patch 512 ở 4× và 40× nhìn vùng mô khác nhau; chưa có micromet/pixel thì không ép chúng thành vùng tương đương.
 
@@ -226,7 +226,7 @@ Tạo cache cho cả train/valid/test bằng encoder ngoại bộ **đã cố đ
 
 Chỉ áp dụng khi patient mapping và số người mỗi lớp cho phép:
 
-1. Khóa cohort chính, labels, seed và ba outer folds theo người. Nếu 16 ca là 16 người riêng biệt, mỗi outer test khoảng 5–6 người; đây là minh họa, chưa phải split thực tế.
+1. Khóa cohort chính, labels, seed và ba outer folds theo người. Người dùng đã xác nhận 18 ca release là 18 người riêng biệt, nên cohort chính gồm 16 người; mỗi outer test sẽ khoảng 5–6 người nếu protocol 3-fold được xác nhận khả thi. Split thực tế chưa được tạo.
 2. Outer test được để riêng. Trong khoảng 10–11 người outer-train, dùng hai inner folds: train và validation đổi vai để chọn epoch.
 3. Cấu hình đầu tiên cố định trước run. Metric chọn epoch là validation BCE loss, patience 5, tối đa 30 epoch. Nếu thêm candidate hyperparameters, chúng chỉ được chọn trong inner loop.
 4. Lấy số epoch refit theo median của hai best epochs, làm tròn lên và ít nhất 1. Khởi tạo head mới, train trên toàn outer-train đúng số epoch đó. Không dùng outer test để early-stop.
@@ -304,48 +304,46 @@ Sau nghiên cứu có thể refit một model phát hành trên toàn bộ devel
 
 | Trạm | Đầu vào → công việc | Đầu ra lưu | Điều kiện qua trạm / người giám sát xem |
 |---|---|---|---|
-| G0 · nguồn | 25 ZIP + metadata → snapshot, coverage | source_manifest/config | Local đủ 25; Drive mới có ZIP gốc 001. Người dùng tải 002–025. 8 ZIP đóng lại là bộ riêng chưa đủ; decode/CRC toàn bộ còn thiếu |
-| G1 · identity/labels | Hồ sơ + mã ca → xác minh người và task | patient_map, labels, cohort | patient_id xác nhận; nhãn đúng cấp; 16-common/18-all rõ. **Chưa xong** |
-| G2 · protocol | Cohort → group outer/inner split, study configs | splits, protocol.json | Không giao người; từng tập đủ lớp; endpoint/threshold/fits đã khóa. **Chưa xong** |
-| G3 · adapter/preflight | Code + vài patch → nối ZIP/metadata, tọa độ, lens, RGB | inventory, smoke QC, part commits | Đã thêm lệnh inventory/import/audit, notebook Colab riêng; smoke 6 patch thật qua. Feature finite, checkpoint và preflight encoder còn thiếu |
-| G4 · import/encode | Một ZIP/nhóm PNG mỗi lượt → CRC/SHA/shape + frozen encode | features.npy, index/QC, commit, release/audit | Đã triển khai extractor và notebook tự chạy/resume. CPU smoke sáu PNG thật đủ ba lens, hai mode ZIP/directory qua; chưa T4/full 148.991 patch |
-| G5 · bags | Features + labels/splits → ca×lens references | bags/bundle | Không va chạm bag_id/lẫn ca; full bags/masks đúng; no patch label propagation. **Chưa xong** |
+| G0 · nguồn | 25 ZIP + metadata → snapshot và coverage | source manifest/config | Drive đã có đủ 25 ZIP. ZIP021 (6.200 PNG) qua kiểm CRC và SHA; kiểm payload toàn bộ vẫn thuộc G4. Tập ZIP đóng lại từ PNG là nguồn riêng, không trộn vào bộ ZIP gốc. |
+| G1 · identity/labels | Hồ sơ + mã ca → governance người bệnh và nhãn ca | governance, case review | Người dùng xác nhận 18 ca thuộc 18 người; nhãn nhị phân gồm 10 ca lành và 8 ca có ung thư. Artifact governance có checksum/version đang được xây dựng; cohort 16 ca đủ lens và cohort phụ 18 ca được tách rõ. |
+| G2 · protocol | Cohort → outer/inner split và study config | split manifest, protocol | Split phải group theo người, đủ lớp và ghi endpoint/threshold trước khi dùng. Toolkit đang phát triển; chưa có split artifact được tạo và audit. |
+| G3 · adapter/preflight | Code + patch mẫu → kiểm ZIP/metadata/tọa độ/lens/RGB | inventory, smoke QC, part commits | Extractor, lệnh inventory/import/audit và notebook Colab đã có. 154 kiểm thử local/CI qua; T4 smoke sáu patch thật tạo `6×2048` vector float32 trong 112,616 giây. Checkpoint MIL thuộc bước sau. |
+| G4 · import/encode | ZIP theo từng lượt → CRC/SHA/shape + encode frozen | features, index/QC, commit, release/audit | Smoke CPU ZIP/directory và smoke T4 đã qua. Production T4 đang chạy source plan 24 ZIP; sau lượt này resume với 25 ZIP. Full cache 148.991 vector và audit chưa hoàn tất. |
+| G5 · bags | Features + governance/splits → ca×lens references | bags, instance refs, bundle riêng cho mỗi cohort | Tooling đang được phát triển; chưa có bundle được tạo và audit. Cohort chính 16 ca và cohort phụ 18 ca dùng bundle ID riêng. Bag IDs, masks, duplicate checks và không gán nhãn xuống patch là điều kiện bắt buộc. |
 | G6 · inner fits/refit | Bundle train/validation → học head | logs/checkpoints/epoch choices | Gradient hữu hạn; encoder SHA không đổi; chỉ inner chọn; resume đúng. **Chưa chạy** |
 | G7 · outer evaluation | Refit weights + outer test → predict một lần | OOF/fold metrics/maps | Mỗi ca đúng fold/model; không tuning outer; báo count/uncertainty. **Chưa chạy** |
 | G8 · báo cáo/export | Tất cả runs → đối chứng và final artifacts | report/model card/weights | Không giấu run lỗi; phân biệt OOF và model refit demo; sources đầy đủ. **Chưa chạy** |
 
-Adapter precut đã qua 101 tests local và CI của PR #2. Sáu PNG thật cùng cặp trùng tọa độ đã được kiểm smoke. Những kiểm tra này chưa xác nhận feature cache hoặc MIL, vốn chưa được triển khai. Mã mới khi triển khai phải qua pipeline/PR/CI theo AGENTS.md; các lỗi phải tái hiện E2E trước khi sửa.
+Adapter precut đã qua 101 kiểm thử local và CI của PR #2. Sáu PNG thật, gồm một cặp trùng tọa độ, đã được kiểm smoke. Feature extractor đã triển khai; 154 kiểm thử local/CI và smoke T4 đã qua. Full cache/audit đang chạy; governance, split và bag tooling đang được phát triển; MIL chưa chạy. Mã mới phải qua pipeline/PR/CI theo AGENTS.md; lỗi cần được tái hiện E2E trước khi sửa.
 
 Chức năng cũ `colab_training.py` dùng patch-level BCE; kế thừa phần importer/checkpoint phù hợp, không chạy nó như trainer MIL này. `histology_data.precut` đã có adapter PNG/ZIP; `histology_data.features` đã có frozen encoder/cache và notebook; trainer MIL mới chưa có. Lỗi `bag_id=slide_group_id` phải sửa hoặc không được dùng trường đó khi xây bag mới; ID cấp ca và cấp ca-lens phải có namespace rõ.
 
 ## 11. Chạy và lưu ở đâu để thuận tiện trên Colab?
 
-Một notebook điều phối, mount/config/dependencies một lần mỗi phiên. Ưu tiên runtime CPU cho đóng gói/kiểm kê/QC; runtime T4 cho encode và train, nhằm dành ngân sách GPU cho tính toán cần GPU. Phiên T4 dùng để benchmark chuẩn bị nguồn đã được tắt theo yêu cầu người dùng sau khoảng 67 phút; không giữ GPU trong lúc người dùng tự tải ZIP lên Drive. **Drive 5 TB** là storage bền vững, `/content` là scratch mất khi VM bị xóa. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
+Một notebook điều phối mount/config/dependencies một lần mỗi phiên. Các công việc nặng như feature extraction chạy trên Colab T4; Drive lưu trữ bền, còn `/content` là scratch mất khi VM bị xóa. Một phiên benchmark I/O trước đây đã dùng khoảng 67 phút rồi được kết thúc; đó là sự kiện lịch sử, không phải trạng thái runtime hiện tại. Hiện production feature writer đang chạy trên T4. Colab Free không bảo đảm T4 hoặc thời lượng; dự báo bằng preflight. [Colab FAQ](https://research.google.com/colaboratory/faq.html).
 
 ```text
-Drive/histology/
-  source/Metadata.xlsx             metadata đã đối chiếu checksum
-  source/archives/                  ZIP gốc 001 đã truyền thử; không dùng làm release đầy đủ
-  source/archives_from_drive/       25 ZIP đóng lại từ PNG đã duyệt + members/ + commits/ + release.json
-  runtime/                         runtime ZIP, notebook đã cấu hình
-  precut/v001/                     inventory, smoke; parts/ khi chạy full import
-  governance/<version>/            patient_map, labels, cohort, outer/inner splits
-  encoders/<encoder_id>/           pretrained weights, SHA, preprocess config
-  features/<feature_version>/
-    part-001/ ... part-025/         features.npy, tile_index.parquet, commit.json
-  bundles/<bundle_version>/        bags.parquet, labels/splits references, bundle.json
-  runs/<run_id>/                   resolved config, env, logs, checkpoints, predictions
-  reports/<study_version>/         OOF, metrics, maps, comparison, model card
+Drive/histology/                                  (gốc Colab: /content/drive/MyDrive/histology)
+  source/Metadata.xlsx                            metadata nguồn
+  source/archives/Tiles-20261009T164818Z-1-NNN.zip  ZIP gốc 001–025
+  runtime/histology-feature-runtime.zip           code extractor, không chứa dữ liệu/weights
+  governance/drafts/<draft_id>/                   case_review.csv, draft.json
+  governance/<governance_id>/                      governance.json, cases.csv, case_review.csv
+  encoders/resnet50_imagenet_v1/                   weights, SHA và preprocessing config
+  features/v001/<feature_id>/parts/<part_id>/      features.npy, tile_index.jsonl, qc.json, commit.json
+  bundles/<bundle_id>/                             bags.jsonl, instance_refs.jsonl, splits.json,
+                                                    bundle.json, training_readiness.json
+  runs/<run_id>/                                   resolved config, môi trường, log và checkpoints
 
 /content/histology-work/           chỉ ZIP/feature part đang cần và scratch
 /content/feature_cache/            có thể stage toàn cache ~1,22 GB để train
 ```
 
-25 ZIP gốc có trên máy dự án. Phiên Colab `histology-ad841-precut-20261010` của `ad8410552@gmail.com` đã gắn Drive; runtime, metadata và notebook đã lưu trên Drive. Đã đóng lại và kiểm 8 phần trực tiếp từ folder PNG đã duyệt (47.692 PNG). Theo yêu cầu người dùng, tiến trình đã dừng trước khi phần 009 hoàn tất; bản tạm được dọn, 8 commit giữ nguyên. Người dùng tự tải ZIP gốc từ máy lên `source/archives`; phần 001 đã có và đã kiểm SHA, cần thêm 002–025. Thư mục `archives_from_drive` chỉ là nguồn đóng lại chưa đầy đủ, không trộn hai bộ. Các phần đóng lại được đối chiếu từng member với kích thước/CRC của danh mục ZIP gốc, ghi SHA từng PNG và commit từng phần. ZIP đóng lại có SHA khác ZIP gốc; nội dung PNG và đường dẫn member phải giữ nguyên. Release chỉ được coi đủ khi `release.json` có `complete=true`, 25 phần và 148.991 PNG. Notebook trên Drive giữ `ARCHIVE_DIR=source/archives` cho bộ ZIP gốc được người dùng tải lên. Chưa chạy kiểm kê/smoke Colab toàn release, full import hoặc encode. Trước khi chạy, kiểm đúng 25 tên/kích thước ZIP, đối chiếu danh mục member/CRC với manifest nguồn và kiểm checksum/PNG theo từng phần.
+Một phiên Colab trước đây từng đóng gói và kiểm tám phần từ thư mục PNG đã duyệt (47.692 PNG), rồi dừng trước phần thứ chín theo yêu cầu người dùng; bộ đóng lại đó là một nguồn riêng, chưa đầy đủ và không được trộn với ZIP gốc. Tình trạng hiện tại khác: 25 ZIP gốc đã được publish trong `$DRIVE_ROOT/source/archives/`, với tên `Tiles-20261009T164818Z-1-001.zip` đến `Tiles-20261009T164818Z-1-025.zip`. ZIP021 đã qua CRC/SHA; lượt production hiện tại được lập source plan khi mới có 24 ZIP nên cần resume sau khi writer kết thúc để nhận đủ 25. Không cần tạo lại PNG bằng full precut import trước khi encode: feature extractor kiểm tra và encode trong cùng luồng. Full payload verification, feature release và audit toàn cục vẫn đang chờ hoàn tất.
 
-Truyền thử ZIP gốc 001 (2.148.242.228 byte) từ máy lên Colab mất **647,489 giây**, khoảng **3,318 MB/s**; thêm **57,367 giây** để lưu/xác minh Drive. Đóng lại phần 002 từ PNG trên Drive với 16 luồng đọc mất **175,444 giây**, thêm **37,825 giây** để lưu/xác minh. Các số này là benchmark I/O, không phải tốc độ CNN. Bằng chứng tại `Results/planning_20261010/colab_setup/`.
+Benchmark I/O lịch sử: truyền ZIP001 (2.148.242.228 byte) từ máy lên Colab mất 647,489 giây; lưu/xác minh Drive thêm 57,367 giây. Đóng lại phần 002 từ PNG trên Drive với 16 luồng đọc mất 175,444 giây, lưu/xác minh thêm 37,825 giây. Lượt chuyển ZIP021 mới mất 576 giây; CRC/SHA trên Colab mất 29,811 giây. Đây là số đo truyền và xác minh file, không phải tốc độ CNN. Bằng chứng tại `Results/planning_20261010/colab_setup/` và `Results/planning_20261010/pretrain/`.
 
-Notebook import patch là `notebooks/Colab_PreCut_Import.ipynb`. Luồng trích vector đã có notebook riêng `notebooks/Colab_Feature_Extraction.ipynb` và hướng dẫn `docs/FEATURE_EXTRACTION.md`; chọn ZIP đã tải hoặc nhóm PNG trực tiếp, không tạo lại ZIP dữ liệu. Runtime mới `histology-feature-runtime.zip` chứa code, không chứa dữ liệu/weights. Không cần đủ 25 ZIP mới bắt đầu; thêm ZIP giữ part IDs cũ. Kiểm CRC/PNG và encode trong cùng luồng; vector/index/QC/commit lưu theo phần, global audit khi đủ nguồn. Encoder tải ImageNet V1 với full SHA, frozen, features float32 2.048 chiều; PNG nguồn giữ nguyên. Trên CPU đã thử sáu PNG thật, đủ hai/lens, cả ZIP/directory; resume không forward lại. T4/full pass vẫn chưa chạy; MIL tiếp theo cần G1/G2/G5.
+Notebook import patch là `notebooks/Colab_PreCut_Import.ipynb`. Feature extractor có notebook riêng `notebooks/Colab_Feature_Extraction.ipynb` và hướng dẫn `docs/FEATURE_EXTRACTION.md`; chọn ZIP gốc đã tải hoặc thư mục PNG, không đóng gói lại nguồn. Runtime ZIP chứa code, không chứa dữ liệu hay weights. Extractor có thể chạy với upload một phần; mỗi part lưu vectors/index/QC/commit và có thể resume. Kiểm CRC/PNG diễn ra trong luồng encode; global coverage/duplicate audit cần nguồn đầy đủ. Encoder dùng ResNet50 ImageNet V1 frozen, tạo vectors float32 2.048 chiều; PNG gốc không đổi. Smoke T4 sáu ảnh thật đã qua; production T4 đang chạy source plan 24 ZIP và sẽ resume với plan 25. Full cache/audit chưa hoàn tất. Governance, split, bundle và readiness audit vẫn phải qua trước MIL.
 
 **Vòng encode:** stage một ZIP, tính/kiểm archive hash khi đọc → đọc PNG từng member, kiểm CRC/SHA/shape → RGB/resize/encoder batches → ghi features/index ra SSD → sync Drive và đọc lại xác minh → commit → dọn scratch → ZIP tiếp. Không giải nén mọi PNG của cohort trên máy cá nhân. Hash/encode có thể kết hợp một lượt đọc cho encoder frozen; global duplicate/coverage gates phải qua trước training.
 
@@ -373,6 +371,8 @@ Mỗi vector lưu float32 cùng tile_id, image_id, case/patient mapping referenc
 
 Thời gian LAN chuyển PC→máy đã đo **không phải** tốc độ Drive→Colab. Nếu budget không đủ, commit feature parts và chạy số fit phù hợp rồi resume; không bỏ patch/cohort/fold âm thầm. Việc một phiên hoàn thành là mục tiêu, không cam kết của Colab Free.
 
+Kế hoạch thực thi phần **trước train** được tách ở [PRETRAIN_EXECUTION.md](PRETRAIN_EXECUTION.md), ghi công việc, dependencies, đầu vào/đầu ra và gates cụ thể.
+
 ## 12. Sản phẩm cuối cùng và cách nhận biết đã hoàn thành
 
 1. **Dataset/bundle có version:** có thể truy bag → vector → patch → ảnh → ca → người; biết các loại trừ và split.
@@ -382,7 +382,7 @@ Thời gian LAN chuyển PC→máy đã đo **không phải** tốc độ Drive�
 5. **Attention visualization:** hỗ trợ xem vùng model dùng trong từng ảnh nguồn, không phải patch truth.
 6. **Model demo/refit và model card:** cấu hình inference đầy đủ; tách khỏi bằng chứng test OOF.
 
-Các quyết định còn phụ thuộc dữ liệu: patient mapping, label semantics/task, lịch sử resize/màu của PNG, nguồn ZIP bền vững trên Drive, khả thi split theo người và số đo T4. Các phần kiến trúc còn lại đã được mô tả đủ để triển khai và kiểm tra từng trạm.
+Người dùng đã xác nhận 18 ca thuộc 18 người riêng biệt và quy tắc nhãn nhị phân 10/8; bằng chứng người dùng được lưu riêng. Drive đã có đủ 25 ZIP và smoke T4 đã qua. Còn phải tạo/audit governance, split và bundle; full feature extraction và release audit đang chạy. Lịch sử crop/màu cần được lưu làm provenance; không suy ra đăng ký vật lý giữa các độ phóng đại.
 
 Phân độ là study sau: chỉ khi bác sĩ xác nhận biến grade đúng cấp và đủ người mỗi lớp mới chuyển head sang nhiều lớp/ordinal loss và metrics phù hợp như macro-F1/QWK. Không suy Grade Group từ `Glade` chưa rõ nghĩa để tạo thí nghiệm này.
 
@@ -408,3 +408,5 @@ Số liệu bộ dữ liệu và cache là kiểm kê/tính toán riêng của d
 | 1.1 | 10/10/2026 | Cập nhật kết quả kiểm kê ZIP, smoke thật và bộ import precut/Colab; full import/encode/train vẫn chưa chạy. |
 | 1.2 | 10/10/2026 | Gắn Drive đúng tài khoản, đo I/O, giữ 8 ZIP đóng lại đã commit; chuyển sang người dùng tải ZIP gốc 002–025. Phân biệt hai nguồn và ngân sách T4 330 phút/ngày. |
 | 1.3 | 10/10/2026 | Thêm frozen ResNet50 feature runner, ZIP/directory, partial uploads, budget/resume/audit và notebook tự chạy. CPU real-six smoke qua; T4/full cache/MIL chưa chạy. |
+
+| 1.4 | 10/10/2026 | Cập nhật transform ImageNet V1 thực tế (resize cạnh ngắn 256, center-crop 224); ghi nhận xác nhận người bệnh/nhãn, Drive đủ 25 ZIP, smoke T4 hoàn tất và production đang chạy với source plan 24 ZIP trước khi resume 25; thêm kế hoạch G0–G5/readiness. Full cache, audit và bundle chưa hoàn tất; chưa huấn luyện MIL. |
