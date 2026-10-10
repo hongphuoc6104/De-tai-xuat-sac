@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "drive_root": "/content/drive/MyDrive/histology",
+  "metadata": "source/Metadata.xlsx",
+  "source_root": "source/archives",
+  "source_kind": "zip",
+  "feature_root": "features/v001",
+  "case_review": "governance/reviews/case_review.csv",
+  "user_confirmation": "governance/reviews/user_confirmation.json",
+  "cohorts": [
+    "common",
+    "all"
+  ],
+  "expected_sources": 25,
+  "expected_vectors": 148991,
+  "outer_folds": 3,
+  "inner_folds": 2,
+  "seed": 42,
+  "allow_training": false,
+  "source_pixels": "approved PNGs retained unchanged",
+  "encoder_preprocessing": "ResNet50 IMAGENET1K_V1.transforms: resize short edge256, center crop224, ImageNet mean/std",
+  "runtime_policy": "CPU pretrain tooling; no VM allocation, no encoder or training invocation"
+}

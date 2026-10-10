@@ -406,12 +406,15 @@ def test_watch_notifies_without_stopping_an_active_vm(tmp_path: Path):
     """A reached local estimate sends a warning but leaves the remote VM running."""
     registry = make_registry(tmp_path, ["primary"])
     store = colab_manager.StateStore(tmp_path / "state" / "state.json")
+    now = datetime.now(timezone.utc)
+    _, local_day_start, _ = colab_manager.local_day_bounds(now)
+    colab_manager.SettingsStore(tmp_path / "config" / "settings.json").set_budget("T4", 1, "primary")
     colab_manager.record_created_session(
         store,
         "primary",
         "monitored",
         "T4",
-        datetime.now(timezone.utc) - timedelta(minutes=345),
+        local_day_start,
     )
     result = run_manager(tmp_path, "watch", profiles_path=registry)
     assert result.returncode == 0, result.stderr
