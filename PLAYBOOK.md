@@ -138,3 +138,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 
 
 - [ERR-20261011-18..20] Weighted PCA, Ward row identity và novelty-member query ownership: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
+
+- [ERR-20261011-21..26] Artifact compute/read leases, worker error/recovery và B1 count/GPU/cache semantic: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
