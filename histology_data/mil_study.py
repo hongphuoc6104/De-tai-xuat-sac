@@ -15,12 +15,12 @@ import torch
 from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
 
 from .io import atomic_json, file_hash, fingerprint
+from .mil_case_cache import CacheDataset, verify_source_readonly
 from .mil_checkpoint import CheckpointStore, FitLock
 from .mil_data import BundleDataset
 from .mil_model import MILModel, ModelConfig
 from .mil_outputs import publish_case_attention, verify_attention_outputs
 from .mil_training import TrainConfig, evaluate, run_fit, source_fingerprint
-from .readiness import verify_pretrain_bundle
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,6 +100,7 @@ def run_pilot(
     bundle: Path, feature_root: Path, output: Path, *, deadline: float,
     variant: str = "E4", epochs: int = 2, recover_stale_lock: bool = False,
     stop_requested: Callable[[], bool] | None = None,
+    case_cache: Path | None = None,
 ) -> dict[str, Any]:
     """Benchmark one locked inner fit with full real bags, without touching outer test.
 
@@ -110,7 +111,7 @@ def run_pilot(
         raise RuntimeError("Pilot requires actual CUDA on Colab; refusing CPU fallback.")
     if type(epochs) is not int or not 1 <= epochs <= 2:
         raise ValueError("Pilot is bounded to one or two epochs.")
-    verify_pretrain_bundle(Path(bundle), Path(feature_root), deadline=deadline)
+    verify_source_readonly(Path(bundle), Path(feature_root), deadline)
     splits = json.loads((Path(bundle) / "splits.json").read_text())
     outer = splits["outer"][0]
     counts = {case_id: 0 for case_id in outer["train_cases"]}
@@ -128,9 +129,11 @@ def run_pilot(
     )
     torch.cuda.reset_peak_memory_stats()
     started = time.monotonic()
+    def dataset(ids: list[str]) -> Any:
+        return CacheDataset(bundle, feature_root, case_cache, ids) if case_cache else BundleDataset(bundle, feature_root, ids)
+
     result = run_fit(
-        BundleDataset(bundle, feature_root, inner["train_cases"]),
-        BundleDataset(bundle, feature_root, inner["validation_cases"]), Path(output) / "fit", config,
+        dataset(inner["train_cases"]), dataset(inner["validation_cases"]), Path(output) / "fit", config,
         fit_identity={"mode": "pilot", "outer": 0, "inner": inner["fold"], "split_id": splits["split_id"]},
         deadline=deadline, recover_stale_lock=recover_stale_lock, stop_requested=stop_requested,
     )
@@ -140,7 +143,7 @@ def run_pilot(
         "peak_gpu_allocated_bytes": torch.cuda.max_memory_allocated(),
         "peak_gpu_reserved_bytes": torch.cuda.max_memory_reserved(),
         "process_peak_RSS_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-        "full_bags": True, "largest_outer_train_case": largest_case,
+        "full_bags": True, "case_cache_used": case_cache is not None, "largest_outer_train_case": largest_case,
         "largest_case_instances": counts[largest_case], "inner_fold": inner["fold"],
     }
     atomic_json(Path(output) / "benchmark.json", report)
@@ -152,6 +155,7 @@ def run_study(
     *, deadline: float, recover_stale_lock: bool = False, allow_synthetic_cpu: bool = False,
     recovery_evidence: dict[str, dict[str, Any]] | None = None,
     stop_requested: Callable[[], bool] | None = None,
+    case_cache: Path | None = None,
 ) -> dict[str, Any]:
     """Execute/reconcile nested fits without ever reusing head weights across folds.
 
@@ -167,7 +171,7 @@ def run_study(
     if not 1 <= config.max_epochs <= 30 or config.patience < 1:
         raise ValueError("Study epoch/patience protocol is invalid.")
     bundle, feature_root, output = Path(bundle), Path(feature_root), Path(output)
-    verified = verify_pretrain_bundle(bundle, feature_root, deadline=deadline)
+    verified = verify_source_readonly(bundle, feature_root, deadline)
     if not verified["training_ready"]:
         raise ValueError("Bundle failed production readiness.")
     manifest = json.loads((bundle / "bundle.json").read_text())
@@ -187,6 +191,8 @@ def run_study(
         "split_id": splits["split_id"], "feature_id": manifest["feature_id"],
         "governance_id": manifest["governance_id"], "config": dataclasses.asdict(config),
         "source_fingerprint": source_fingerprint(),
+        "case_cache_identity": CacheDataset(bundle, feature_root, case_cache, splits["case_ids"]).identity
+                               if case_cache else None,
     }
     # JSON normalization avoids tuple/list differences when resuming from disk.
     identity = json.loads(json.dumps(identity))
@@ -197,6 +203,9 @@ def run_study(
     rows: list[dict[str, Any]] = []
     completed = 0
     total = len(config.variants) * 9
+
+    def dataset(ids: list[str]) -> Any:
+        return CacheDataset(bundle, feature_root, case_cache, ids) if case_cache else BundleDataset(bundle, feature_root, ids)
 
     def status(phase: str, **kwargs: Any) -> dict[str, Any]:
         result = {"phase": phase, "completed_fits": completed, "expected_fits": total,
@@ -224,8 +233,9 @@ def run_study(
                     fit_dir = output / "fits" / variant / f"outer_{outer_index}" / f"inner_{inner['fold']}"
                     if time.monotonic() >= deadline or (stop_requested and stop_requested()):
                         return status("paused_budget", next_fit=fit_id)
-                    train_dataset = BundleDataset(bundle, feature_root, inner["train_cases"])
-                    validation_dataset = BundleDataset(bundle, feature_root, inner["validation_cases"])
+                    status("running", current_fit=fit_id)
+                    train_dataset = dataset(inner["train_cases"])
+                    validation_dataset = dataset(inner["validation_cases"])
                     fit_config = dataclasses.replace(train_config, seed=train_config.seed + inner["fold"] * 10)
                     fit = run_fit(train_dataset, validation_dataset, fit_dir, fit_config, fit_identity=fit_id,
                                   deadline=deadline, recover_stale_lock=recover_stale_lock,
@@ -234,6 +244,7 @@ def run_study(
                     if fit["phase"] != "complete":
                         return status(fit["phase"], next_fit=fit_id)
                     completed += 1
+                    status("running", last_completed=fit_id)
                     best_epochs.append(fit["best_epoch"])
                 epoch_count = max(1, math.ceil(float(np.median(best_epochs))))
                 refit_config = dataclasses.replace(train_config, mode="refit", max_epochs=epoch_count,
@@ -242,7 +253,8 @@ def run_study(
                 refit_dir = output / "fits" / variant / f"outer_{outer_index}" / "refit"
                 if time.monotonic() >= deadline or (stop_requested and stop_requested()):
                     return status("paused_budget", next_fit=refit_id)
-                refit = run_fit(BundleDataset(bundle, feature_root, outer["train_cases"]), None,
+                status("running", current_fit=refit_id)
+                refit = run_fit(dataset(outer["train_cases"]), None,
                                 refit_dir, refit_config, fit_identity=refit_id, deadline=deadline,
                                 recover_stale_lock=recover_stale_lock,
                                 lock_recovery_evidence=recovery.get(str(refit_dir.relative_to(output))),
@@ -263,7 +275,7 @@ def run_study(
                 else:
                     if time.monotonic() >= deadline or (stop_requested and stop_requested()):
                         return status("paused_budget", next_fit={**refit_id, "prediction_pending": True})
-                    test_dataset = BundleDataset(bundle, feature_root, outer["test_cases"])
+                    test_dataset = dataset(outer["test_cases"])
                     model = _load_fit_model(refit_dir, refit_config)
                     predictions = evaluate(model, test_dataset, config.device, config=refit_config,
                                            deadline=deadline,

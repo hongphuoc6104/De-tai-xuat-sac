@@ -134,4 +134,4 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Test bộ đếm theo ngày phải tạo timestamp và budget theo ranh giới lịch mà implementation sử dụng, không giả định thời lượng runtime vượt qua nửa đêm vẫn được tính trong cùng ngày.
 
 - [ERR-20261011-03..06] Mount/kernel, Monaco, artifact transfer và official Drive flush: xem [.agents/skills/colab-runtime-recovery/SKILL.md](.agents/skills/colab-runtime-recovery/SKILL.md).
-- [ERR-20261011-07..11] MIL bundle integration, read-only tensors, identity, deadlines và checkpoint commit: xem [.agents/skills/histology-mil/SKILL.md](.agents/skills/histology-mil/SKILL.md).
+- [ERR-20261011-07..14] MIL bundle integration, read-only tensors, identity, deadlines và checkpoint commit: xem [.agents/skills/histology-mil/SKILL.md](.agents/skills/histology-mil/SKILL.md).

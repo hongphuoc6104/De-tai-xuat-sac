@@ -88,6 +88,7 @@ def source_fingerprint() -> str:
     """Bind a fit to the actual trainer/model/loader/checkpoint implementation bytes."""
     root = Path(__file__).parent
     names = ("mil_model.py", "mil_data.py", "mil_checkpoint.py", "mil_training.py", "mil_study.py", "mil_outputs.py",
+             "mil_case_cache.py",
              "bags.py", "readiness.py", "splits.py", "features.py", "io.py")
     return fingerprint({name: file_hash(root / name) for name in names})
 

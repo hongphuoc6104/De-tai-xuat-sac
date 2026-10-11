@@ -8,6 +8,7 @@ import sys
 import zipfile
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -34,6 +35,7 @@ def test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements
     second = build_runtime_archive(ROOT, tmp_path / "second.zip")
     assert first["sha256"] == second["sha256"]
     assert first["file_count"] == len(first["files"])
+    assert "histology_data/mil_case_cache.py" in first["files"]
     assert "histology_data/mil_runtime.py" in first["files"]
     assert "scripts/run_mil.py" in first["files"]
     assert "requirements-mil.txt" in first["files"]
@@ -88,6 +90,7 @@ def test_actual_notebook_bootstrap_cells_use_only_root_and_sha_overrides(
         exec(compile(bootstrap_cell, "notebook-runtime-bootstrap", "exec"), namespace)
         runtime_path = namespace["RUNTIME_PATH"]
         assert runtime_path.is_dir()
+        assert (runtime_path / "histology_data" / "mil_case_cache.py").is_file()
         assert (runtime_path / "histology_data" / "mil_runtime.py").is_file()
         assert (runtime_path / "scripts" / "run_mil.py").is_file()
         assert namespace["bootstrap_runtime"](
@@ -124,3 +127,83 @@ def test_notebook_cells_have_safe_defaults_and_no_remote_runtime_controls() -> N
         assert forbidden not in lowered
     assert "pip install torch" not in lowered
     assert not re.search(r"(?:AIza[0-9A-Za-z_-]{30,}|ghp_[0-9A-Za-z]{30,}|-----BEGIN .*PRIVATE KEY-----)", combined)
+
+
+def test_actual_cache_stage_cell_and_pilot_production_configs_use_materialized_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    code_cells = dict(_code(_load_notebook()))
+    stage_source = next(source for source in code_cells.values() if "case_cache_path = prepare_case_cache" in source)
+    run_source = next(source for source in code_cells.values() if 'if RUN_MODE == "smoke":' in source)
+
+    calls: dict[str, Any] = {}
+    fake_torch = ModuleType("torch")
+    fake_torch.cuda = SimpleNamespace(
+        is_available=lambda: True,
+        get_device_name=lambda _index: "Tesla T4",
+    )
+    fake_cache = ModuleType("histology_data.mil_case_cache")
+    fake_runtime = ModuleType("histology_data.mil_runtime")
+
+    staged_bundle = tmp_path / "stage" / "bundle"
+    staged_features = tmp_path / "stage" / "features"
+    expected_cache = tmp_path / "stage" / "case-caches" / "cache-identity"
+
+    def stage_inputs(bundle: Path, feature_root: Path, stage_root: Path, *, deadline: float) -> dict[str, Any]:
+        calls["stage"] = (bundle, feature_root, stage_root, deadline)
+        return {
+            "bundle_path": staged_bundle,
+            "feature_root": staged_features,
+            "staged_bytes": 123,
+            "bundle_id": "b" * 64,
+        }
+
+    def prepare_cache(bundle: Path, feature_root: Path, cache_root: Path, deadline: float) -> Path:
+        calls["cache"] = (bundle, feature_root, cache_root, deadline)
+        return expected_cache
+
+    fake_runtime.stage_training_inputs = stage_inputs
+    fake_cache.prepare_case_cache = prepare_cache
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "histology_data.mil_runtime", fake_runtime)
+    monkeypatch.setitem(sys.modules, "histology_data.mil_case_cache", fake_cache)
+    namespace: dict[str, Any] = {
+        "BUNDLE_PATH": tmp_path / "drive" / "bundle",
+        "FEATURE_ROOT": tmp_path / "drive" / "features",
+        "STAGE_ROOT": tmp_path / "stage",
+        "_monotonic_deadline": lambda: 9876.5,
+    }
+    exec(compile(stage_source, "notebook-cache-stage", "exec"), namespace)
+
+    assert namespace["case_cache_path"] == expected_cache
+    assert calls["stage"] == (
+        namespace["BUNDLE_PATH"], namespace["FEATURE_ROOT"], namespace["STAGE_ROOT"], 9876.5,
+    )
+    assert calls["cache"] == (staged_bundle, staged_features, namespace["STAGE_ROOT"] / "case-caches", 9876.5)
+
+    def run_branch(mode: str) -> tuple[str, dict[str, Any]]:
+        captured: list[tuple[str, dict[str, Any], int]] = []
+        branch_namespace: dict[str, Any] = {
+            "RUN_MODE": mode,
+            "RUN_OUTPUT_ROOT": tmp_path / "drive" / "runs",
+            "staged": {"bundle_id": "b" * 64, "bundle_path": staged_bundle, "feature_root": staged_features},
+            "EXPECTED_RUNTIME_SHA256": "a" * 64,
+            "case_cache_path": expected_cache,
+            "PILOT_EPOCHS": 1,
+            "PRODUCTION_VARIANTS": ["E0"],
+            "PRODUCTION_EPOCHS": 1,
+            "_seconds_until_stop": lambda: 120.0,
+            "_run_mil_cli": lambda name, config, *, timeout_cap_seconds: (
+                captured.append((name, config, timeout_cap_seconds)) or {"phase": "complete"}
+            ),
+        }
+        exec(compile(run_source, f"notebook-{mode}-config", "exec"), branch_namespace)
+        assert len(captured) == 1
+        name, config, _timeout = captured[0]
+        return name, config
+
+    pilot_name, pilot_config = run_branch("pilot")
+    production_name, production_config = run_branch("production")
+    assert pilot_name == "pilot" and pilot_config["case_cache"] == str(expected_cache)
+    assert production_name == "production" and production_config["case_cache"] == str(expected_cache)

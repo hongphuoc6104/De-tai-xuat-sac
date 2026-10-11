@@ -47,3 +47,19 @@
 - **Wrong Assumptions:** Tổng một và source model softmax đủ bảo vệ mọi caller/artifact attention.
 - **Resolution & Proof:** Chặn phần tử âm trước ghi weights; chạy lại cùng E2E cùng real governed artifact tests và callback-failure study.
 - **Golden Prevention Rule:** Artifact boundary phải kiểm đủ miền giá trị, không chỉ shape và tổng; không coi output ngoài model là đáng tin mặc định.
+
+## [ERR-20261011-13] Cache loader chưa khởi tạo hợp đồng số lượng nguồn
+- **Symptom:** CacheDataset.load_case ném AttributeError ở `_source_instance_counts`.
+- **Reproduction Path:** `tests/test_mil_case_cache_safety.py`; trace trước sửa tại `Results/proofs/mil_case_cache_safety_20261011.log`.
+- **Root Cause:** Constructor xác minh cache nhưng chưa lưu bảng số lượng ca/vật kính cho load boundary.
+- **Wrong Assumptions:** Kiểm commit cache thay được contract count của nguồn đã verify.
+- **Resolution & Proof:** Khởi tạo bảng count từ bundle đã verify; chặn bags bị cắt ngắn dù đã tính lại checksum. 14 cache tests và full conveyor 327 passed/1 skipped.
+- **Golden Prevention Rule:** Mọi invariant được kiểm tại load boundary phải khởi tạo từ nguồn độc lập ngay ở constructor.
+
+## [ERR-20261011-14] Consumer verifier ghi audit vào dataset nguồn
+- **Symptom:** E2E cached/uncached study làm thay đổi file audit nguồn dù training chỉ đọc dữ liệu.
+- **Reproduction Path:** `tests/test_mil_cached_study.py::test_cached_study_matches_uncached_weights_oof_and_verified_callback_order`; assertion tree hashes trước/sau consumer.
+- **Root Cause:** Public pretrain verifier có trách nhiệm xuất audit; study gọi trực tiếp trên source tree.
+- **Wrong Assumptions:** Verify là thao tác read-only ở mọi API.
+- **Resolution & Proof:** Verify đầy đủ trên mirror tạm bằng `verify_source_readonly`; giữ source tree hashes nguyên vẹn. Cached và uncached study cho cùng weights, OOF, tile order; toàn bộ 327 tests pass.
+- **Golden Prevention Rule:** Phân biệt verifier có side effects với consumer chỉ đọc; kiểm immutability trên E2E, không chỉ array contents.

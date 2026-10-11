@@ -138,6 +138,8 @@ Khi local L0–L3 qua và trainer release/CI qua, đưa đúng runtime/config/fi
 
 CPU↔GPU smoke dùng cùng payload/model weights ở chế độ eval để kiểm forward với tolerance. Không dùng sự trùng tuyệt đối trajectory CPU/GPU làm tiêu chí; PyTorch không đảm bảo reproducibility giữa môi trường/phần cứng. Chốt tolerance và deterministic settings từ smoke, lưu trong config; không nới tolerance để che lỗi logic.
 
+**Tối ưu sau C2 đo thật:** cache ma trận đầy đủ theo ca trên SSD, dựng từ nguồn đã verify/public loader; kiểm checksum và ràng buộc label/patient/lens/tile order khi đọc. Thử corruption, source mismatch và forgery rehash/truncate; không tin checksum tự khai nếu không khớp source authorization. Chuẩn bị cache không học tham số và không đọc outer labels để chọn model. Source full-verify đầu run, cached immutable snapshot độc lập sau đó; benchmark cache lại trước production. Không coi cache này là dữ liệu mới hoặc augmentation.
+
 ## 7. Khi nào tự phục hồi, khi nào dừng?
 
 - **Được retry có giới hạn:** đọc/copy I/O transient, khi checksum/owner/session vẫn đúng; dùng backoff và ghi số lần. Không retry optimizer step trên state đã cập nhật một phần; khởi động lại từ last commit.

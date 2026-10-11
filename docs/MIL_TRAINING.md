@@ -32,6 +32,14 @@ Real export config: bundle path, feature_root, output fixture path, outer0/inner
 
 Production config: `bundle`, `feature_root`, `output`, `variants` (defaultE0..E4), `epochs`30, `patience`5; luôn có deadline. Output phải ở Drive. Stage input features lên SSD qua `stage_training_inputs`, không stage PNG/ZIP.
 
+## Cache bag đầy đủ theo ca sau benchmark
+
+T4 pilot thực tế: hai epoch full bag khoảng 57 giây/epoch; peak VRAM reserved0,64 GiB, RSS1,66 GiB. Profile một ca inner-train 19.736 instances: public verified loader9,437 giây, copy/transfer0,094 giây, forward/backward/step0,028 giây. Đây là số đo kỹ thuật, không là clinical performance.
+
+`prepare_case_cache` kiểm nguồn đầy đủ rồi dùng public loader cho từng ca một lần để materialize ba ma trận và thứ tự tile. Cache ở SSD Colab, bound với bundle/feature/split/source hashes, giữ mọi vector và dtype/tile order; không sampling, re-encode hoặc học tham số từ test. `CacheDataset` kiểm manifest/commit/checksum/schema/case identity từng lần đọc; study vẫn full-verify nguồn khi mở run. Cache là snapshot bất biến của phiên bản đã verify, không phản ánh thay đổi nguồn sau snapshot.
+
+CLI pilot/production nhận `case_cache` path tùy chọn; notebook tự chuẩn bị cache. Namespace outputs thêm runtime SHA để không trộn checkpoint code cũ/mới. Cache chỉ giảm kiểm lặp toàn feature parts; không bỏ kiểm toàn vẹn payload được train. Phải qua byte-equality và adversarial tests, CI, rồi benchmark lại trên T4 trước full study.
+
 ## Checkpoint và resume
 
 Lưu baseline epoch0 trước optimizer step đầu. Mỗi epoch train/validation hoàn tất lưu state model+optimizer+RNG+global step+history+early-stop; receipt xác nhận SHA/identity mới là commit. Giữ tất cả phiên bản committed trong run; `best` để chọn inner epoch, `latest` để tiếp tục. State schema bound với data/fold/config/source code/environment.

@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                 deadline=_deadline(args.deadline_utc, 30), variant=values.get("variant", "E4"),
                 epochs=values.get("epochs", 2), recover_stale_lock=values.get("recover_stale_lock", False),
                 stop_requested=stop.is_set,
+                case_cache=Path(values["case_cache"]) if values.get("case_cache") else None,
             )
         else:
             if args.deadline_utc is None:
@@ -120,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
                 Path(values["bundle"]), Path(values["feature_root"]), output, config,
                 deadline=_deadline(args.deadline_utc, 300), recover_stale_lock=values.get("recover_stale_lock", False),
                 recovery_evidence=values.get("recovery_evidence"), stop_requested=stop.is_set,
+                case_cache=Path(values["case_cache"]) if values.get("case_cache") else None,
             )
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 0 if result["phase"] in {"complete", "fixture_complete"} else 2

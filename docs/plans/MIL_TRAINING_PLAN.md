@@ -121,6 +121,8 @@ MyDrive/histology/
 
 `/content` là scratch: stage features cần dùng lên SSD Colab, chỉ đưa bag hiện tại lên GPU. Không nạp toàn PNG/cohort vào RAM. Notebook mount/config một lần mỗi phiên.
 
+**Bổ sung sau benchmark 11/10/2026:** public loader mất9,437 giây cho một ca19.736 instances, GPU step0,028 giây; full-bag pilot khoảng57 giây/epoch. Chuẩn bị cache bag đầy đủ từng ca trên SSD qua public verified loader một lần, bound source hashes/IDs và tile order. Training đọc cache có checksum từng ca, vẫn full-verify nguồn đầu run; không sampling/re-encode hoặc fit preprocessing trên test. So byte-equivalence, adversarial gates, CI và benchmark T4 lại trước C3. Xem [hướng dẫn cache](../MIL_TRAINING.md).
+
 Checkpoint giữ model, optimizer, epoch, best metric/patience, RNG, scaler/scheduler nếu dùng và fingerprints. Resume cùng fit ở ranh giới epoch; ngắt giữa epoch replay từ snapshot an toàn. Ghi qua temp/commit, checksum và xác minh trên Drive; file tồn tại chưa đủ. Không ghi đè checkpoint hợp lệ trước khi bản mới được xác minh.
 
 Ngân sách lập lịch của dự án: **330 phút T4/ngày**, dành **30 phút dự phòng**, tối đa 300 phút công việc theo budget còn lại. Đây không là cam kết quota Google. Đo thời gian fit trước khi chọn số fit trong phiên; không cam kết 45 fits xong một phiên. Khi thiếu budget, lưu trạng thái/checkpoint rồi resume; không giảm cohort/patch/fold âm thầm. Không tạo phiên hoặc chuyển profile tự động chỉ vì kế hoạch có ghi.
