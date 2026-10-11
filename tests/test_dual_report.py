@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pytest
 
 from histology_data.dual_atlas import cluster_case_label_crosstab, summarize_partition
 from histology_data.dual_common import ArtifactStore, gzip_csv_bytes
@@ -200,25 +201,62 @@ def test_renderer_verifies_lineage_anonymizes_ids_and_builds_self_contained_repo
     assert representatives.stat().st_mode & 0o777 == 0o600
 
 
-def test_b1_is_partial_until_both_candidates_match_a_and_b(tmp_path: Path) -> None:
+def test_b1_final_result_reports_mixed_selection_and_subset_without_fake_full_beta05(tmp_path: Path) -> None:
     shared, a_store, b_store, source_map = _fixture_stores(tmp_path)
     cases = list(source_map["case_tile_order"])
     targets = [0, 1, 0, 1, 1]
-    records = [{"case_id": case, "patient_id": f"synthetic-patient-{index}", "target": targets[index],
-                "probability": 0.2 + 0.6 * targets[index]} for index, case in enumerate(cases)]
     b1_store = ArtifactStore(tmp_path / "B1", {"branch": "B1", "source": "fixture"})
-    b1_store.json("oof/beta0.json", records)
-    b1_store.json("oof/beta05.json", records[:-1])
-    args = {"beta=0.0": "oof/beta0.json", "beta=0.5": "oof/beta05.json"}
-    partial = render_dual_report(
-        a_store, b_store, shared, source_map, tmp_path / "partial", tmp_path / "private" / "map.json",
-        b1=b1_store, b1_artifacts=args,
-    )
-    assert partial["b1"]["status"] == "partial"
-    b1_store.json("oof/beta05-complete.json", records)
+    selected_beta_by_outer = {"0": 0.0, "1": 0.5, "2": 0.0}
+    control, selected = [], []
+    for index, case in enumerate(cases):
+        fold = index % 3
+        common = {"case_id": case, "target": targets[index], "outer_fold": fold}
+        control.append({**common, "probability": 0.2 + 0.6 * targets[index], "beta": 0.0})
+        selected_beta = selected_beta_by_outer[str(fold)]
+        selected.append({**common, "probability": 0.25 + 0.5 * targets[index], "beta": selected_beta})
+    selected_beta05 = [row for row in selected if row["beta"] == 0.5]
+    result = {
+        "phase": "complete", "study_id": "synthetic-study", "protocol": "B1-synthetic-v1",
+        "software_only": False, "outer_refits_performed": True, "oof_rows": len(cases),
+        "case_ids": cases, "selected_beta_by_outer": selected_beta_by_outer,
+        "oof_predictions": {
+            "B1_beta0_control": control,
+            "B1_selected": selected,
+            "B1_beta05_selected_folds": selected_beta05,
+        },
+        "metrics": {"B1_beta0_control": {}, "B1_selected": {}},
+    }
+    final_result_path = "B1/neural/synthetic-study/final_result.json"
+    b1_store.json(final_result_path, result)
     complete = render_dual_report(
         a_store, b_store, shared, source_map, tmp_path / "complete", tmp_path / "private" / "map.json",
-        b1=b1_store, b1_artifacts={"beta=0.0": "oof/beta0.json", "beta=0.5": "oof/beta05-complete.json"},
+        b1=b1_store, b1_result_artifact=final_result_path,
     )
     assert complete["b1"]["status"] == "complete"
+    assert complete["b1"]["selected_beta_by_outer"] == selected_beta_by_outer
+    assert complete["b1"]["beta05_selected_folds"] == {
+        "status": "subset_only", "cases": len(selected_beta05), "cohort_cases": len(cases),
+        "coverage": len(selected_beta05) / len(cases),
+        "outer_folds": [1],
+    }
     assert complete["status"] == "complete"
+    lineage = list(csv.DictReader((tmp_path / "complete" / "oof_lineage.csv").open(encoding="utf-8")))
+    assert len(lineage) == len(cases)
+    assert {float(row["selected_beta"]) for row in lineage} == {0.0, 0.5}
+    assert all(row["b1_beta0_5_selected_fold_subset"] for row in lineage
+               if float(row["selected_beta"]) == 0.5)
+    assert all(not row["b1_beta0_5_selected_fold_subset"] for row in lineage
+               if float(row["selected_beta"]) == 0.0)
+    report_text = (tmp_path / "complete" / "report.html").read_text(encoding="utf-8").lower()
+    assert "not a full-cohort beta 0.5 candidate" in report_text
+    assert f"{len(selected_beta05)}/{len(cases)} cases" in report_text
+
+    invalid = {**result, "oof_predictions": {**result["oof_predictions"],
+                                             "B1_beta05_selected_folds": selected_beta05[:-1]}}
+    invalid_path = "B1/neural/synthetic-study/invalid-final-result.json"
+    b1_store.json(invalid_path, invalid)
+    with pytest.raises(ValueError, match="cover"):
+        render_dual_report(
+            a_store, b_store, shared, source_map, tmp_path / "invalid", tmp_path / "private" / "map.json",
+            b1=b1_store, b1_result_artifact=invalid_path,
+        )

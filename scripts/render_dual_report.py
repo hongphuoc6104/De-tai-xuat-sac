@@ -15,6 +15,7 @@ from histology_data.dual_common import ArtifactStore
 from scripts._dual_report_data import (
     REPS,
     _write_private,
+    concentration_rows,
     open_store,
     prepare_report_data,
     read,
@@ -31,26 +32,6 @@ def _save(fig: Any, output: Path, name: str, images: list[Path]) -> None:
     import matplotlib.pyplot as plt
     plt.close(fig)
     images.append(output / f"{name}.png")
-
-
-def _concentration_rows(representatives: Mapping[str, Any]) -> list[tuple[int, str, int, int, int, float, float, int]]:
-    result = []
-    for index, (key, _) in enumerate(REPS):
-        item = representatives.get(key)
-        if item is None:
-            continue
-        clusters: dict[int, list[dict[str, Any]]] = {}
-        for point in item["points"]:
-            clusters.setdefault(point["cluster_id"], []).append(point)
-        for cluster, rows in sorted(clusters.items()):
-            patients = [row["patient_token"] for row in rows]
-            photos = [row["photo_token"] for row in rows]
-            result.append((index, item["title"], cluster,
-                           sum(row["target"] == 0 for row in rows),
-                           sum(row["target"] == 1 for row in rows),
-                           max(patients.count(value) for value in set(patients)) / len(rows),
-                           max(photos.count(value) for value in set(photos)) / len(rows), len(rows)))
-    return result
 
 
 def _atlas_plots(output: Path, atlas: Mapping[str, Any], images: list[Path]) -> None:
@@ -100,7 +81,7 @@ def _atlas_plots(output: Path, atlas: Mapping[str, Any], images: list[Path]) -> 
             axes[1].tick_params(axis="x", labelrotation=70, labelsize=6)
             _save(fig, output, f"a0_grid_lens_{lens}", images)
 
-        concentrations = _concentration_rows(representatives)
+        concentrations = concentration_rows(representatives)
         if concentrations:
             fig, axes = _new_figure(1, 2, (15, max(6, .20 * len(concentrations))))
             y = range(len(concentrations))
@@ -145,19 +126,28 @@ def _oof_plots(output: Path, models: Mapping[str, list[dict[str, Any]]], matched
         cases = sorted({row["case_token"] for row in model_rows})
         position = {case: index for index, case in enumerate(cases)}
         palette = [("A1", "#4c78a8", "o"), ("A counts", "#72b7b2", "s"),
-                   ("B0", "#e45756", "^"), ("B counts", "#f2cf5b", "D")]
-        palette.extend((name, f"C{index % 10}", "P") for index, name in enumerate(
-            key for key in models if key.startswith("B1 ")))
+                   ("B0", "#e45756", "^"), ("B counts", "#f2cf5b", "D"),
+                   ("B1 beta0 control", "#b279a2", "X")]
         for offset, (name, color, marker) in enumerate(palette):
             for index, row in enumerate(models.get(name, [])):
                 x = position[row["case_token"]] + (offset - (len(palette) - 1) / 2) * .09
                 ax.scatter(x, row["probability"], color=color, marker=marker,
                            edgecolor="black" if row["target"] else "white", linewidth=.5,
                            label=name if index == 0 else None)
+        selected_rows = models.get("B1 selected", [])
+        selected_offset = len(palette)
+        for beta, marker, label in ((0.0, "v", "B1 selected β=0"),
+                                    (0.5, "P", "B1 selected β=0.5")):
+            selected_group = [row for row in selected_rows if row["beta"] == beta]
+            for index, row in enumerate(selected_group):
+                x = position[row["case_token"]] + (selected_offset - len(palette) / 2) * .09
+                ax.scatter(x, row["probability"], color="#54a24b", marker=marker,
+                           edgecolor="black" if row["target"] else "white", linewidth=.5,
+                           label=label if index == 0 else None)
         ax.axhline(.5, color="#555", linewidth=.8, linestyle="--")
         ax.set(xticks=range(len(cases)), xticklabels=cases, ylim=(-.03, 1.03),
                ylabel="OOF probability", xlabel="opaque case token",
-               title="A1 / B0 OOF probabilities and counts-only controls")
+               title="A1 / B0 and B1 OOF; selected B1 beta varies by outer fold")
         ax.tick_params(axis="x", labelrotation=70, labelsize=7)
         ax.legend(ncol=2)
         _save(fig, output, "oof_case_scatter", images)
@@ -199,13 +189,22 @@ def _write_reports(output: Path, manifest: Mapping[str, Any], images: list[Path]
     headers = ["Model", "n", "negative", "positive", "mean P0", "mean P1", "log loss", "Brier"]
     status = (f"Report **{manifest['status']}** · A0 **{manifest['a0']['status']}** · "
               f"A/B **{manifest['matched_oof']['status']}** · B1 **{manifest['b1']['status']}**")
+    subset = manifest["b1"].get("beta05_selected_folds")
+    if subset:
+        subset_note = (f"B1 beta 0.5 selected-fold subset: {subset['cases']}/{subset['cohort_cases']} cases "
+                       f"({subset['coverage']:.1%}); this is not a full-cohort beta 0.5 candidate.")
+    else:
+        subset_note = "B1 beta 0.5 selected-fold subset: pending."
     md = ["# Dual-track exploratory report", "", status,
           "A0 uses the five-patient outer_0/inner_0 training scope. Source case labels describe the origin case, not patch-level truth.",
+          "B1 selected OOF uses the inner-selected beta per outer fold.", subset_note,
           "", "## Case-level OOF summary", "", "| " + " | ".join(headers) + " |",
           "|---|---:|---:|---:|---:|---:|---:|---:|"]
     md.extend("| " + " | ".join(map(str, row)) + " |" for row in summaries)
     sections = [f"<h1>Dual-track exploratory report</h1><p>{html.escape(status)}</p>",
                 "<p>A0 uses the five-patient outer_0/inner_0 training scope. Source case labels describe the origin case, not patch-level truth.</p>",
+                "<p>B1 selected OOF uses the inner-selected beta per outer fold.</p>",
+                f"<p>{html.escape(subset_note)}</p>",
                 "<h2>Case-level OOF summary</h2>", _table(headers, summaries)]
     configs = []
     for lens, data in manifest["a0"].get("lenses", {}).items():
@@ -231,7 +230,7 @@ def _write_reports(output: Path, manifest: Mapping[str, Any], images: list[Path]
 
 def render_dual_report(a: ArtifactStore, b: ArtifactStore, shared: ArtifactStore, source: Mapping[str, Any],
                        output_dir: Path, private_map: Path, *, b1: ArtifactStore | None = None,
-                       b1_artifacts: Mapping[str, str] | None = None,
+                       b1_result_artifact: str | None = None,
                        representatives_private_path: Path | None = None) -> dict[str, Any]:
     """Render committed A0/A1/B0 receipts and privately export up to 96 review refs.
 
@@ -249,7 +248,10 @@ def render_dual_report(a: ArtifactStore, b: ArtifactStore, shared: ArtifactStore
             or rep_path.resolve().is_relative_to(output.resolve())):
         raise ValueError("Representative CSV must be a distinct private file outside the report directory.")
     output.mkdir(parents=True, exist_ok=True)
-    data = prepare_report_data(a, b, shared, source, output, private_map, b1=b1, b1_artifacts=b1_artifacts)
+    if b1_result_artifact is not None and b1 is None:
+        raise ValueError("A B1 final-result artifact requires its committed ArtifactStore.")
+    data = prepare_report_data(a, b, shared, source, output, private_map, b1=b1,
+                               b1_result_artifact=b1_result_artifact)
     images: list[Path] = []
     _atlas_plots(output, data["atlas"], images)
     _oof_plots(output, data["models"], data["matched"], data["a_by"], data["b_by"], images)
@@ -273,20 +275,17 @@ def main() -> None:
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--representatives-private", type=Path)
     parser.add_argument("--b1-store", type=Path)
-    parser.add_argument("--b1-artifact", action="append", default=[], metavar="CANDIDATE=NAME")
+    parser.add_argument("--b1-final-result-artifact")
     args = parser.parse_args()
-    names = {}
-    for item in args.b1_artifact:
-        candidate, separator, artifact = item.partition("=")
-        if not separator or candidate in names or not candidate or not artifact:
-            parser.error("--b1-artifact must be unique CANDIDATE=NAME")
-        names[candidate] = artifact
+    if args.b1_final_result_artifact and not args.b1_store:
+        parser.error("--b1-final-result-artifact requires --b1-store")
     shared = open_store(args.shared_store)
     source = read(shared, "source_photo_map.pkl", pickle.loads, required=True)
     result = render_dual_report(
         open_store(args.a_store), open_store(args.b_store), shared, source, args.output_dir,
         args.private_mapping, b1=open_store(args.b1_store) if args.b1_store else None,
-        b1_artifacts=names or None, representatives_private_path=args.representatives_private,
+        b1_result_artifact=args.b1_final_result_artifact,
+        representatives_private_path=args.representatives_private,
     )
     print(json.dumps({"status": result["status"], "a0": result["a0"]["status"],
                       "matched_oof": result["matched_oof"]["status"], "b1": result["b1"]["status"]}))

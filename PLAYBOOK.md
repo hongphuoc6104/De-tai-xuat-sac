@@ -142,3 +142,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261011-21..26] Artifact compute/read leases, worker error/recovery và B1 count/GPU/cache semantic: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
 
 - [ERR-20261012-01] File API upload cần parent tồn tại: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261012-27] B1 report producer/consumer và subset coverage: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).

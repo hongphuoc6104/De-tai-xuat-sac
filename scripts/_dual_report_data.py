@@ -342,15 +342,21 @@ def point_lineage_csv(atlas: Mapping[str, Any]) -> str:
 
 
 def oof_lineage_csv(models: Mapping[str, list[dict[str, Any]]]) -> str:
+    def column_name(name: str) -> str:
+        return name.lower().replace(" ", "_").replace("=", "").replace(".", "_").replace("-", "_")
+
     rows: dict[str, dict[str, Any]] = {}
     for name, values in models.items():
         for row in values:
             point = rows.setdefault(row["case_token"], {"case_token": row["case_token"],
                                                          "source_case_label": row["target"]})
-            point[name.lower().replace(" ", "_").replace("=", "").replace(".", "_")] = row["probability"]
-    fields = ["case_token", "source_case_label", "a1", "a_counts", "b0", "b_counts"]
-    fields.extend(name.lower().replace(" ", "_").replace("=", "").replace(".", "_")
-                  for name in models if name.startswith("B1 "))
+            point[column_name(name)] = row["probability"]
+            if name == "B1 selected":
+                point["outer_fold"] = row["outer_fold"]
+                point["selected_beta"] = row["beta"]
+    fields = ["case_token", "source_case_label", "outer_fold", "selected_beta",
+              "a1", "a_counts", "b0", "b_counts"]
+    fields.extend(column_name(name) for name in models if name.startswith("B1 "))
     return _csv_text(list(rows.values()), fields)
 
 
@@ -363,10 +369,138 @@ def _validate_controls(main: list[dict[str, Any]], control: list[dict[str, Any]]
         raise ValueError(f"{name} primary and counts OOF rows do not align.")
 
 
+def _metadata_by_case(models: Mapping[str, list[dict[str, Any]]]) -> tuple[dict[str, str], dict[str, int]]:
+    patients: dict[str, str] = {}
+    targets: dict[str, int] = {}
+    for rows in models.values():
+        for row in rows:
+            case = row["case_id"]
+            metadata = (row["patient_id"], row["target"])
+            if case in patients and (patients[case], targets[case]) != metadata:
+                raise ValueError("A/B OOF metadata differs for a shared case.")
+            patients[case], targets[case] = metadata
+    return patients, targets
+
+
+def _b1_prediction_rows(
+    rows: Any,
+    *,
+    name: str,
+    cohort: set[str],
+    expected_cases: set[str],
+    patient_by_case: Mapping[str, str],
+    target_by_case: Mapping[str, int],
+    tokens: PrivateTokens,
+    beta_by_outer: Mapping[str, float],
+    fixed_beta: float | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        raise ValueError(f"B1 {name} predictions must be a row list.")
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError(f"B1 {name} prediction rows must be objects.")
+        case, target, probability = (row.get(key) for key in ("case_id", "target", "probability"))
+        fold, beta = row.get("outer_fold"), row.get("beta")
+        if (not isinstance(case, str) or case not in cohort or case in seen
+                or case not in patient_by_case or case not in target_by_case
+                or type(target) is not int or target != target_by_case[case]
+                or isinstance(probability, bool) or not isinstance(probability, (int, float))
+                or not math.isfinite(probability) or not 0 <= probability <= 1
+                or type(fold) is not int or str(fold) not in beta_by_outer
+                or isinstance(beta, bool) or not isinstance(beta, (int, float))
+                or float(beta) != (fixed_beta if fixed_beta is not None else beta_by_outer[str(fold)])
+                or (fixed_beta is not None and float(beta) != fixed_beta)
+                or ("patient_id" in row and row["patient_id"] != patient_by_case[case])):
+            raise ValueError(f"Invalid B1 {name} OOF metadata for case {case!r}.")
+        seen.add(case)
+        normalized.append({"case_id": case, "patient_id": patient_by_case[case], "target": target,
+                           "probability": float(probability), "outer_fold": fold, "beta": float(beta),
+                           "case_token": tokens.case(case, patient_by_case[case], target)})
+    if seen != expected_cases:
+        raise ValueError(f"B1 {name} predictions cover {len(seen)} rows; expected {len(expected_cases)}.")
+    return normalized
+
+
+def _read_b1_result(store: ArtifactStore | None, artifact: str | None, cohort: set[str],
+                    base_models: Mapping[str, list[dict[str, Any]]],
+                    tokens: PrivateTokens) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any]]:
+    if store is None or artifact is None:
+        return {}, {"status": "pending", "source": "run_neural_study final_result.json"}
+    result = read(store, artifact)
+    if not isinstance(result, Mapping):
+        return {}, {"status": "pending", "source": "run_neural_study final_result.json",
+                    "missing": [artifact]}
+    case_ids = result.get("case_ids")
+    expected_variant_names = {"B1_beta0_control", "B1_selected", "B1_beta05_selected_folds"}
+    if (result.get("phase") != "complete" or result.get("software_only") is not False
+            or result.get("outer_refits_performed") is not True
+            or not isinstance(result.get("study_id"), str) or not result["study_id"]
+            or not isinstance(result.get("protocol"), str) or not result["protocol"]
+            or result.get("oof_rows") != len(cohort)
+            or not isinstance(case_ids, list) or any(not isinstance(case, str) for case in case_ids)
+            or len(case_ids) != len(cohort) or set(case_ids) != cohort):
+        raise ValueError("B1 final_result must be a complete full-cohort outer-refit result.")
+    predictions = result.get("oof_predictions")
+    if not isinstance(predictions, Mapping) or set(predictions) != expected_variant_names:
+        raise ValueError("B1 final_result must contain the three committed prediction groups.")
+    metrics = result.get("metrics")
+    if not isinstance(metrics, Mapping) or set(metrics) != {"B1_beta0_control", "B1_selected"}:
+        raise ValueError("B1 final_result must contain metrics for the two full-cohort variants.")
+    selection = result.get("selected_beta_by_outer")
+    if (not isinstance(selection, Mapping) or not selection
+            or any(not isinstance(key, str) or not key.isdecimal()
+                   or type(value) not in (int, float) or float(value) not in (0.0, 0.5)
+                   for key, value in selection.items())):
+        raise ValueError("B1 selected_beta_by_outer must map fold ids to beta 0.0 or 0.5.")
+    beta_by_outer = {key: float(value) for key, value in selection.items()}
+    patient_by_case, target_by_case = _metadata_by_case(base_models)
+    full = _b1_prediction_rows(
+        predictions["B1_beta0_control"], name="beta0_control", cohort=cohort,
+        expected_cases=cohort, patient_by_case=patient_by_case, target_by_case=target_by_case,
+        tokens=tokens, beta_by_outer=beta_by_outer, fixed_beta=0.0,
+    )
+    selected = _b1_prediction_rows(
+        predictions["B1_selected"], name="selected", cohort=cohort,
+        expected_cases=cohort, patient_by_case=patient_by_case, target_by_case=target_by_case,
+        tokens=tokens, beta_by_outer=beta_by_outer, fixed_beta=None,
+    )
+    control_by_case = {row["case_id"]: row for row in full}
+    selected_by_case = {row["case_id"]: row for row in selected}
+    if any(control_by_case[case]["outer_fold"] != selected_by_case[case]["outer_fold"] for case in cohort):
+        raise ValueError("B1 control and selected predictions disagree on outer-fold assignment.")
+    folds = {str(row["outer_fold"]) for row in selected}
+    if folds != set(beta_by_outer) or {row["beta"] for row in selected} - {0.0, 0.5}:
+        raise ValueError("B1 selected OOF rows do not cover the declared outer folds.")
+    beta05_cases = {case for case, row in selected_by_case.items() if row["beta"] == 0.5}
+    beta05 = _b1_prediction_rows(
+        predictions["B1_beta05_selected_folds"], name="beta05_selected_folds", cohort=cohort,
+        expected_cases=beta05_cases, patient_by_case=patient_by_case, target_by_case=target_by_case,
+        tokens=tokens, beta_by_outer=beta_by_outer, fixed_beta=0.5,
+    )
+    for row in beta05:
+        selected_row = selected_by_case[row["case_id"]]
+        if (row["outer_fold"], row["target"], row["probability"]) != (
+                selected_row["outer_fold"], selected_row["target"], selected_row["probability"]):
+            raise ValueError("B1 beta .5 subset differs from the matching selected-fold predictions.")
+    models = {"B1 beta0 control": full, "B1 selected": selected,
+              "B1 beta0.5 selected-fold subset": beta05}
+    return models, {
+        "status": "complete", "source": "run_neural_study final_result.json",
+        "control_cases": len(full), "selected_cases": len(selected),
+        "selected_beta_by_outer": beta_by_outer,
+        "beta05_selected_folds": {"status": "subset_only" if beta05 else "not_selected",
+                                  "cases": len(beta05), "cohort_cases": len(cohort),
+                                  "coverage": len(beta05) / len(cohort),
+                                  "outer_folds": sorted({row["outer_fold"] for row in beta05})},
+    }
+
+
 def prepare_report_data(a: ArtifactStore, b: ArtifactStore, shared: ArtifactStore,
                         source: Mapping[str, Any], output: Path, private_map: Path, *,
                         b1: ArtifactStore | None = None,
-                        b1_artifacts: Mapping[str, str] | None = None) -> dict[str, Any]:
+                        b1_result_artifact: str | None = None) -> dict[str, Any]:
     committed_source = read(shared, "source_photo_map.pkl", pickle.loads, required=True)
     if committed_source != source:
         raise ValueError("Source-photo map differs from the committed shared artifact.")
@@ -393,28 +527,18 @@ def prepare_report_data(a: ArtifactStore, b: ArtifactStore, shared: ArtifactStor
         and matched and {a_by[key]["target"] for key in matched} == {0, 1}
     ) else "partial"
 
-    b1_models: dict[str, list[dict[str, Any]]] = {}
-    if b1 is not None and b1_artifacts:
-        if set(b1_artifacts) - {"beta=0.0", "beta=0.5"}:
-            raise ValueError("B1 candidates must be beta=0.0 and/or beta=0.5.")
-        for candidate, path in b1_artifacts.items():
-            rows = _oof(b1, path, cohort, tokens)
-            if rows is not None:
-                b1_models[f"B1 {candidate}"] = rows
-        models.update(b1_models)
-    b1_status = "complete" if (
-        set(b1_artifacts or {}) == {"beta=0.0", "beta=0.5"} and len(b1_models) == 2
-        and all({row["case_id"] for row in rows} == cohort for rows in b1_models.values())
-        and matched_status == "matched_full_cohort"
-    ) else "partial" if b1_models else "pending"
+    b1_models, b1_manifest = _read_b1_result(
+        b1, b1_result_artifact, cohort, models, tokens,
+    )
+    models.update(b1_models)
     atlas = _atlas(a, shared, source, tokens)
     tokens.save()
     manifest = {
         "status": "complete" if atlas["status"] == "complete"
-        and matched_status == "matched_full_cohort" and b1_status == "complete" else "partial",
+        and matched_status == "matched_full_cohort" and b1_manifest["status"] == "complete" else "partial",
         "a0": _public_atlas(atlas),
         "matched_oof": {"status": matched_status, "matched_cases": len(matched), "cohort_cases": len(cohort)},
-        "b1": {"status": b1_status, "candidates": sorted(b1_models)},
+        "b1": b1_manifest,
     }
     return {"manifest": manifest, "atlas": atlas, "models": models, "matched": matched,
             "a_by": a_by, "b_by": b_by, "point_csv": point_lineage_csv(atlas),
@@ -472,3 +596,26 @@ def select_representatives(atlas: Mapping[str, Any], maximum: int = 96) -> list[
 
 def representative_csv(rows: list[dict[str, Any]]) -> str:
     return _csv_text(rows, REPRESENTATIVE_FIELDS)
+
+
+def concentration_rows(
+    representatives: Mapping[str, Any],
+) -> list[tuple[int, str, int, int, int, float, float, int]]:
+    """Summarize cluster counts and largest patient/photo row shares for plotted partitions."""
+    result = []
+    for index, (key, _) in enumerate(REPS):
+        item = representatives.get(key)
+        if item is None:
+            continue
+        clusters: dict[int, list[dict[str, Any]]] = {}
+        for point in item["points"]:
+            clusters.setdefault(point["cluster_id"], []).append(point)
+        for cluster, rows in sorted(clusters.items()):
+            patients = [row["patient_token"] for row in rows]
+            photos = [row["photo_token"] for row in rows]
+            result.append((index, item["title"], cluster,
+                           sum(row["target"] == 0 for row in rows),
+                           sum(row["target"] == 1 for row in rows),
+                           max(patients.count(value) for value in set(patients)) / len(rows),
+                           max(photos.count(value) for value in set(photos)) / len(rows), len(rows)))
+    return result
