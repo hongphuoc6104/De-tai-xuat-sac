@@ -50,3 +50,11 @@ Các thao tác SSH trong entries là lịch sử pretrain, không là cách ch�
 - [ERR-20261009-11] Local pytest wrapper che lỗi import CI: xem histology-shards/references/failures.md.
 
 Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/skills/histology-shards/references/failures.md).
+
+### [ERR-20261012-01] File API upload không tạo thư mục cha
+- **Triệu chứng (Symptom):** Upload hai artifact báo cáo vào thư mục mới trả HTTP500; file local vẫn nguyên vẹn.
+- **Tái hiện E2E (Reproduction Path):** Native upload tới reports/cpu_preliminary trước khi thư mục tồn tại; proof `Results/clustering_dual/execution_20261011/operations/upload_parent_directory_20261012.json`.
+- **Nguyên nhân cốt lõi (Root Cause):** File API tạo file nhưng không tạo cây thư mục đích chưa tồn tại.
+- **Giả định sai (Wrong Assumptions):** Upload API hoạt động như mkdir -p rồi copy.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Tạo đúng parent trong kernel Colab đã mount, retry cùng hai payload; hai upload exit0. Không đổi VM, mount hay payload.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Xác nhận thư mục cha trước transfer; lọc proxy-token khỏi lỗi CLI trước khi đưa output vào báo cáo.
