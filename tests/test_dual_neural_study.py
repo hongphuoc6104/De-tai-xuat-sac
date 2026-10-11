@@ -1,6 +1,7 @@
 """Bounded synthetic loop/resume checks for B1 nested member orchestration."""
 from __future__ import annotations
 
+import copy
 import json
 import os
 import pickle
@@ -465,6 +466,7 @@ def test_production_fit_count_matches_beta_zero_and_selected_beta_outer_fits(
     assert locked_status["phase"] == "error"
     assert locked_status["error_category"] == "concurrency"
 
+    fit_count_output = tmp_path / "fit-count-output"
     result = run_neural_study(
         dataset_all,
         dataset_factory,
@@ -472,7 +474,7 @@ def test_production_fit_count_matches_beta_zero_and_selected_beta_outer_fits(
         source_map,
         shared,
         branch_b,
-        tmp_path / "fit-count-output",
+        fit_count_output,
         time.monotonic() + 300,
         device="cuda",
         max_epochs=1,
@@ -484,6 +486,46 @@ def test_production_fit_count_matches_beta_zero_and_selected_beta_outer_fits(
     assert result["completed_fits"] == 72
     assert result["expected_fits"] == 72
     assert result["expected_fits_max"] == 72
+
+    identity = json.loads((fit_count_output / "resolved_config.json").read_text(encoding="utf-8"))
+    dual_neural_study.verify_neural_result(result, dataset_all, splits, identity)
+    artifact_name = f"B1/neural/{result['study_id']}/final_result.json"
+    corruptions = ("duplicate_case", "drop_case", "wrong_target", "wrong_patient", "wrong_metric")
+    for corruption in corruptions:
+        forged = copy.deepcopy(result)
+        primary = forged["oof_predictions"]["B1_selected"]
+        if corruption == "duplicate_case":
+            primary.append(copy.deepcopy(primary[0]))
+        elif corruption == "drop_case":
+            primary.pop()
+        elif corruption == "wrong_target":
+            primary[0]["target"] = 1 - primary[0]["target"]
+        elif corruption == "wrong_patient":
+            primary[0]["patient_id"] = "wrong-patient"
+        else:
+            forged["metrics"]["B1_selected"]["pooled_oof"]["cases"] += 1
+
+        # ArtifactStore verifies the checksum and receipt; the consumer must
+        # still reject semantically corrupt but correctly committed metadata.
+        corrupt_store = ArtifactStore(tmp_path / f"trusted-cache-{corruption}", branch_b.identity)
+        corrupt_store.json(artifact_name, forged)
+        cached_output = tmp_path / f"cached-output-{corruption}"
+        with pytest.raises(ValueError):
+            run_neural_study(
+                dataset_all,
+                dataset_factory,
+                splits,
+                source_map,
+                shared,
+                corrupt_store,
+                cached_output,
+                time.monotonic() + 300,
+                device="cuda",
+                max_epochs=1,
+                smoke=False,
+            )
+        status = json.loads((cached_output / "status.json").read_text(encoding="utf-8"))
+        assert status["phase"] == "error" and status["error_category"] == "integrity"
 
 
 @pytest.mark.parametrize(

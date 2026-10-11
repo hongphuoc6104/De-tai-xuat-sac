@@ -16,7 +16,7 @@ from .dual_common import ArtifactStore, check_deadline
 from .dual_member import prepare_member_states
 from .dual_mil import make_novelty_model_factory, novelty_model_identity
 from .dual_novelty import equal_weight_member_ensemble
-from .io import atomic_json, fingerprint
+from .io import atomic_json, file_hash, fingerprint
 from .mil_checkpoint import CheckpointStore, FitLock, FitLockError
 from .mil_model import ModelConfig
 from .mil_study import metrics as case_metrics
@@ -25,6 +25,10 @@ from .mil_training import TrainConfig, evaluate, run_fit, source_fingerprint
 _BETAS = (0.0, 0.5)
 _BETA_SELECTION_DELTA = 0.01
 _PATIENCE = 5
+
+
+class NeuralResultIntegrityError(ValueError):
+    """A committed or newly built study result failed semantic verification."""
 
 
 def _beta_key(beta: float) -> str:
@@ -51,6 +55,8 @@ def _error_category(error: BaseException | str) -> str:
         return "runtime"
     if isinstance(error, FitLockError):
         return "concurrency"
+    if isinstance(error, NeuralResultIntegrityError):
+        return "integrity"
     if isinstance(error, (OSError, IOError)):
         return "io"
     if isinstance(error, MemoryError):
@@ -118,6 +124,335 @@ def _dataset_identity(dataset: Any) -> dict[str, Any]:
         raise TypeError("dataset_all must expose a verified identity mapping.")
     keys = ("feature_id", "bundle_id", "split_id", "governance_id", "cache_id", "source_manifest_sha256", "mode")
     return {key: identity[key] for key in keys if key in identity}
+
+
+def _study_identity(
+    dataset_all: Any,
+    splits: Mapping[str, Any],
+    source_map: Mapping[str, Any],
+    shared_store: ArtifactStore,
+    b_store: ArtifactStore,
+    *,
+    device: str,
+    max_epochs: int,
+    smoke: bool,
+) -> dict[str, Any]:
+    source_identity = source_map.get("source_identity")
+    if not isinstance(source_identity, Mapping):
+        raise ValueError("Verified source-photo map must include its source dataset identity.")
+    source_identity = {
+        key: source_identity[key]
+        for key in ("feature_id", "bundle_id", "split_id", "governance_id", "cache_id", "source_manifest_sha256", "mode")
+        if key in source_identity
+    }
+    if source_identity != _dataset_identity(dataset_all):
+        raise ValueError("Source-photo map and public dataset identities differ.")
+    module_root = Path(__file__).parent
+    b1_source = {
+        name: file_hash(module_root / name)
+        for name in (
+            "dual_common.py", "dual_member.py", "dual_neural_study.py", "dual_mil.py",
+            "dual_novelty.py", "mil_training.py", "mil_checkpoint.py",
+        )
+    }
+    return {
+        "schema": 1,
+        "protocol": "B1-negative-anchor-full-bag-nested-v1",
+        "split_id": str(splits.get("split_id", fingerprint(splits))),
+        "split_fingerprint": fingerprint(splits),
+        "dataset_identity": _dataset_identity(dataset_all),
+        "source_identity": source_identity,
+        "shared_store_identity_id": shared_store.identity_id,
+        "b_store_identity_id": b_store.identity_id,
+        "betas": list(_BETAS),
+        "minimum_beta_improvement_bce": _BETA_SELECTION_DELTA,
+        "max_epochs": max_epochs,
+        "patience": _PATIENCE,
+        "device": device,
+        "smoke": smoke,
+        "source_fingerprint": source_fingerprint(),
+        "b1_source_fingerprint": fingerprint(b1_source),
+    }
+
+
+def _same_metrics(actual: Any, expected: Any, *, path: str = "metrics") -> None:
+    """Require the persisted report to equal metrics recomputed from its predictions."""
+    if isinstance(expected, Mapping):
+        if not isinstance(actual, Mapping) or set(actual) != set(expected):
+            raise ValueError(f"Cached {path} fields differ from recomputed metrics.")
+        for key, value in expected.items():
+            _same_metrics(actual[key], value, path=f"{path}.{key}")
+        return
+    if isinstance(expected, list):
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            raise ValueError(f"Cached {path} shape differs from recomputed metrics.")
+        for index, value in enumerate(expected):
+            _same_metrics(actual[index], value, path=f"{path}[{index}]")
+        return
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        if (isinstance(actual, bool) or not isinstance(actual, (int, float))
+                or not math.isfinite(float(actual)) or not math.isclose(
+                    float(actual), float(expected), rel_tol=0.0, abs_tol=1e-12,
+                )):
+            raise ValueError(f"Cached {path} differs from recomputed metrics.")
+        return
+    if actual != expected:
+        raise ValueError(f"Cached {path} differs from recomputed metrics.")
+
+
+def _validate_prediction_rows(
+    rows: Any,
+    *,
+    dataset: Any,
+    expected_ids: set[str],
+    fold_by_case: Mapping[str, int],
+    beta_by_case: Mapping[str, float],
+    variant: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        raise ValueError(f"{variant} predictions must be a row list.")
+    ids: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{variant} prediction rows must be objects.")
+        case_id = row.get("case_id")
+        if not isinstance(case_id, str) or case_id not in expected_ids:
+            raise ValueError(f"{variant} predictions include an unknown case.")
+        target = row.get("target")
+        expected_target = dataset.records[case_id].get("target")
+        if type(target) is not int or target != expected_target or target not in (0, 1):
+            raise ValueError(f"{variant} prediction target differs from the public case record.")
+        probability = row.get("probability")
+        if (isinstance(probability, bool) or not isinstance(probability, (int, float))
+                or not math.isfinite(float(probability)) or not 0 <= probability <= 1):
+            raise ValueError(f"{variant} prediction probability is invalid.")
+        outer_fold = row.get("outer_fold")
+        if type(outer_fold) is not int or outer_fold != fold_by_case[case_id]:
+            raise ValueError(f"{variant} prediction is assigned to the wrong outer test fold.")
+        beta = row.get("beta")
+        if isinstance(beta, bool) or not isinstance(beta, (int, float)) or float(beta) != beta_by_case[case_id]:
+            raise ValueError(f"{variant} prediction beta differs from its outer-fold selection.")
+        if "patient_id" in row and row["patient_id"] != dataset.records[case_id].get("patient_id"):
+            raise ValueError(f"{variant} prediction patient differs from the public case record.")
+        ids.append(case_id)
+        normalized.append({
+            "case_id": case_id,
+            "target": target,
+            "probability": float(probability),
+            "outer_fold": outer_fold,
+            "beta": float(beta),
+        })
+    if len(ids) != len(set(ids)) or set(ids) != expected_ids:
+        raise ValueError(f"{variant} predictions must cover each expected case exactly once.")
+    return normalized
+
+
+def verify_neural_result(
+    result: Mapping[str, Any],
+    dataset: Any,
+    splits: Mapping[str, Any],
+    identity: Mapping[str, Any],
+) -> None:
+    """Semantically verify fresh or cached B1 output against its public split/data."""
+    if not isinstance(result, Mapping) or result.get("study_id") != fingerprint(identity):
+        raise ValueError("Neural study result identity does not match its source/split protocol.")
+    smoke = identity.get("smoke") is True
+    if not smoke and result.get("protocol") != identity.get("protocol"):
+        raise ValueError("Neural result protocol differs from its bound study identity.")
+    outer_folds = _validate_nested_splits(dataset, splits, smoke=smoke)
+    expected_cases = tuple(str(case_id) for case_id in splits.get("case_ids", dataset.case_ids))
+    if (len(expected_cases) != len(set(expected_cases)) or set(expected_cases) != set(dataset.case_ids)
+            or any(not isinstance(case_id, str) or not case_id for case_id in dataset.case_ids)):
+        raise ValueError("Neural result expected cases differ from the public dataset.")
+    for case_id in expected_cases:
+        record = dataset.records[case_id]
+        if type(record.get("target")) is not int or record["target"] not in (0, 1):
+            raise ValueError("Public dataset case targets must be binary integers.")
+        if not isinstance(record.get("patient_id"), str) or not record["patient_id"]:
+            raise ValueError("Public dataset case records require nonempty patient IDs.")
+    test_fold: dict[str, int] = {}
+    patient_fold: dict[str, int] = {}
+    for outer in outer_folds:
+        fold = outer["fold"]
+        for case_id in outer["test_cases"]:
+            patient_id = dataset.records[case_id].get("patient_id")
+            if not isinstance(patient_id, str) or not patient_id:
+                raise ValueError("Public dataset case records require nonempty patient IDs.")
+            previous = patient_fold.setdefault(patient_id, fold)
+            if previous != fold:
+                raise ValueError("A patient's cases are split across outer test folds.")
+            test_fold[case_id] = fold
+
+    inner_fits = sum(
+        sum(dataset.records[case_id]["target"] == 0 for case_id in inner["train_cases"])
+        for outer in outer_folds for inner in outer["inner_folds"]
+    ) * len(_BETAS)
+    outer_beta0_fits = sum(
+        sum(dataset.records[case_id]["target"] == 0 for case_id in outer["train_cases"])
+        for outer in outer_folds
+    )
+    expected_max = inner_fits if smoke else inner_fits + 2 * outer_beta0_fits
+    completed = result.get("completed_fits")
+    member_fit_count = result.get("member_fit_count")
+    reported_max = result.get("expected_fits_max")
+    if type(completed) is not int or type(member_fit_count) is not int or member_fit_count != completed:
+        raise ValueError("Neural result completed/member fit counts are inconsistent.")
+    if type(reported_max) is not int or reported_max != expected_max or not 0 <= completed <= expected_max:
+        raise ValueError("Neural result violates the predeclared maximum fit count.")
+
+    outer_keys = {str(outer["fold"]) for outer in outer_folds}
+    selected_by_outer = result.get("selected_beta_by_outer")
+    if (not isinstance(selected_by_outer, Mapping) or set(selected_by_outer) != outer_keys
+            or any(type(beta) not in (int, float) or float(beta) not in _BETAS
+                   for beta in selected_by_outer.values())):
+        raise ValueError("Neural result must select one permitted beta for every outer fold.")
+    selected_beta = {int(key): float(value) for key, value in selected_by_outer.items()}
+
+    if smoke:
+        if (result.get("phase") != "smoke_complete" or result.get("software_only") is not True
+                or result.get("outer_refits_performed") is not False
+                or result.get("oof_predictions") != [] or result.get("oof_rows") != 0
+                or result.get("metrics") is not None or "metrics" in result):
+            raise ValueError("Smoke result may not claim metrics or out-of-fold predictions.")
+        if (type(result.get("expected_fits")) is not int
+                or result["expected_fits"] != inner_fits or completed != inner_fits):
+            raise ValueError("Smoke result must account for every inner fit and no outer refits.")
+        if result.get("selected_beta") != selected_beta[outer_folds[0]["fold"]]:
+            raise ValueError("Smoke selection summary differs from its outer-fold selection.")
+        selection = result.get("selection")
+        if not isinstance(selection, Mapping):
+            raise ValueError("Smoke result lacks a beta selection record.")
+        _verify_selection(selection, selected_beta[outer_folds[0]["fold"]])
+        return
+
+    if result.get("phase") != "complete" or result.get("software_only") is not False:
+        raise ValueError("Production neural result is not a completed model study.")
+    if result.get("outer_refits_performed") is not True:
+        raise ValueError("Production result must record fresh outer refits.")
+    if (result.get("case_ids") != list(expected_cases) or type(result.get("oof_rows")) is not int
+            or result["oof_rows"] != len(expected_cases)):
+        raise ValueError("Production result case list or OOF row count is inconsistent.")
+    selections = result.get("selection")
+    if not isinstance(selections, Mapping) or set(selections) != outer_keys:
+        raise ValueError("Production result requires one inner selection report per outer fold.")
+    for outer in outer_folds:
+        key = str(outer["fold"])
+        if not isinstance(selections[key], Mapping):
+            raise ValueError("Outer beta selection record must be an object.")
+        _verify_selection(selections[key], selected_beta[outer["fold"]])
+    selected_outer_beta05_fits = sum(
+        sum(dataset.records[case_id]["target"] == 0 for case_id in outer["train_cases"])
+        for outer in outer_folds if selected_beta[outer["fold"]] == 0.5
+    )
+    required_fits = inner_fits + outer_beta0_fits + selected_outer_beta05_fits
+    if (type(result.get("expected_fits")) is not int or result["expected_fits"] != required_fits
+            or completed != required_fits):
+        raise ValueError("Production result does not contain exactly the required beta-selected fits.")
+
+    prediction_groups = result.get("oof_predictions")
+    if not isinstance(prediction_groups, Mapping) or set(prediction_groups) != {
+        "B1_beta0_control", "B1_selected", "B1_beta05_selected_folds",
+    }:
+        raise ValueError("Production OOF output must contain the two primary variants and beta .5 subset.")
+    control_betas = {case_id: 0.0 for case_id in expected_cases}
+    selected_betas = {case_id: selected_beta[test_fold[case_id]] for case_id in expected_cases}
+    control = _validate_prediction_rows(
+        prediction_groups["B1_beta0_control"], dataset=dataset, expected_ids=set(expected_cases),
+        fold_by_case=test_fold, beta_by_case=control_betas, variant="B1_beta0_control",
+    )
+    selected = _validate_prediction_rows(
+        prediction_groups["B1_selected"], dataset=dataset, expected_ids=set(expected_cases),
+        fold_by_case=test_fold, beta_by_case=selected_betas, variant="B1_selected",
+    )
+    beta05_cases = {
+        case_id for case_id in expected_cases if selected_beta[test_fold[case_id]] == 0.5
+    }
+    _validate_prediction_rows_subset(
+        prediction_groups["B1_beta05_selected_folds"], dataset=dataset,
+        expected_ids=beta05_cases, fold_by_case=test_fold, beta=0.5,
+        variant="B1_beta05_selected_folds",
+    )
+    if ("metrics" not in result or not isinstance(result["metrics"], Mapping)
+            or set(result["metrics"]) != {"B1_beta0_control", "B1_selected"}):
+        raise ValueError("Production metrics must report exactly the two primary OOF variants.")
+    recomputed = {
+        "B1_beta0_control": _metric_report(control, dataset, outer_folds),
+        "B1_selected": _metric_report(selected, dataset, outer_folds),
+    }
+    _same_metrics(result["metrics"], recomputed)
+
+
+def _verify_selection(selection: Mapping[str, Any], expected_beta: float) -> None:
+    means = selection.get("mean_inner_ensemble_bce")
+    if not isinstance(means, Mapping) or set(means) != {"beta_0", "beta_0p5"}:
+        raise ValueError("Beta selection must report both inner validation BCE means.")
+    values = [means[key] for key in ("beta_0", "beta_0p5")]
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(float(value)) or value < 0 for value in values):
+        raise ValueError("Beta selection BCE values must be finite and nonnegative.")
+    improvement = float(values[0]) - float(values[1])
+    minimum = selection.get("minimum_improvement")
+    actual_improvement = selection.get("improvement_from_beta_0")
+    if (minimum != _BETA_SELECTION_DELTA or isinstance(actual_improvement, bool)
+            or not isinstance(actual_improvement, (int, float))
+            or not math.isclose(float(actual_improvement), improvement, rel_tol=0, abs_tol=1e-12)
+            or selection.get("selected_beta") != expected_beta
+            or (0.5 if improvement >= _BETA_SELECTION_DELTA else 0.0) != expected_beta):
+        raise ValueError("Beta selection summary disagrees with its recorded inner BCE values.")
+
+
+def _require_verified_result(
+    result: Mapping[str, Any], dataset: Any, splits: Mapping[str, Any], identity: Mapping[str, Any],
+) -> None:
+    try:
+        verify_neural_result(result, dataset, splits, identity)
+    except Exception as exc:
+        raise NeuralResultIntegrityError("Neural result failed semantic integrity verification.") from exc
+
+
+def _validate_prediction_rows_subset(
+    rows: Any,
+    *,
+    dataset: Any,
+    expected_ids: set[str],
+    fold_by_case: Mapping[str, int],
+    beta: float,
+    variant: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        raise ValueError(f"{variant} predictions must be a row list.")
+    ids: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError(f"{variant} prediction rows must be objects.")
+        case_id = row.get("case_id")
+        if not isinstance(case_id, str) or case_id not in expected_ids or case_id in ids:
+            raise ValueError(f"{variant} predictions include an unexpected or duplicate case.")
+        target = row.get("target")
+        if type(target) is not int or target != dataset.records[case_id].get("target"):
+            raise ValueError(f"{variant} prediction target differs from the public case record.")
+        probability = row.get("probability")
+        if (isinstance(probability, bool) or not isinstance(probability, (int, float))
+                or not math.isfinite(float(probability)) or not 0 <= probability <= 1):
+            raise ValueError(f"{variant} prediction probability is invalid.")
+        if type(row.get("outer_fold")) is not int or row["outer_fold"] != fold_by_case[case_id]:
+            raise ValueError(f"{variant} prediction is assigned to the wrong outer test fold.")
+        if (isinstance(row.get("beta"), bool)
+                or not isinstance(row.get("beta"), (int, float))
+                or float(row["beta"]) != beta):
+            raise ValueError(f"{variant} prediction has the wrong beta.")
+        if "patient_id" in row and row["patient_id"] != dataset.records[case_id].get("patient_id"):
+            raise ValueError(f"{variant} prediction patient differs from the public case record.")
+        ids.add(case_id)
+        normalized.append({
+            "case_id": case_id, "target": target, "probability": float(probability),
+            "outer_fold": row["outer_fold"], "beta": beta,
+        })
+    if ids != expected_ids:
+        raise ValueError(f"{variant} predictions do not match selected outer-fold test membership.")
+    return normalized
 
 
 def _validate_dataset_view(dataset: Any, case_ids: Sequence[str], *, name: str) -> None:
@@ -495,34 +830,11 @@ def run_neural_study(
     if device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable for the requested B1 device; refusing fallback.")
     outer_folds = _validate_nested_splits(dataset_all, splits, smoke=smoke)
-    split_id = str(splits.get("split_id", fingerprint(splits)))
-    source_identity = source_map.get("source_identity")
-    if not isinstance(source_identity, Mapping):
-        raise ValueError("Verified source-photo map must include its source dataset identity.")
-    source_identity = {
-        key: source_identity[key]
-        for key in ("feature_id", "bundle_id", "split_id", "governance_id", "cache_id", "source_manifest_sha256", "mode")
-        if key in source_identity
-    }
-    if source_identity != _dataset_identity(dataset_all):
-        raise ValueError("Source-photo map and public dataset identities differ.")
-    identity = {
-        "schema": 1,
-        "protocol": "B1-negative-anchor-full-bag-nested-v1",
-        "split_id": split_id,
-        "split_fingerprint": fingerprint(splits),
-        "dataset_identity": _dataset_identity(dataset_all),
-        "source_identity": source_identity,
-        "shared_store_identity_id": shared_store.identity_id,
-        "b_store_identity_id": b_store.identity_id,
-        "betas": list(_BETAS),
-        "minimum_beta_improvement_bce": _BETA_SELECTION_DELTA,
-        "max_epochs": max_epochs,
-        "patience": _PATIENCE,
-        "device": device,
-        "smoke": smoke,
-        "source_fingerprint": source_fingerprint(),
-    }
+    identity = _study_identity(
+        dataset_all, splits, source_map, shared_store, b_store,
+        device=device, max_epochs=max_epochs, smoke=smoke,
+    )
+    split_id = identity["split_id"]
     study_id = fingerprint(identity)
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -535,8 +847,16 @@ def run_neural_study(
     committed_result = b_store.read(result_name)
     if committed_result is not None:
         result = json.loads(committed_result)
-        if result.get("study_id") != study_id:
-            raise ValueError("Committed neural study result belongs to a different identity.")
+        try:
+            _require_verified_result(result, dataset_all, splits, identity)
+        except Exception as exc:
+            _status(output, phase="error", study_id=study_id,
+                    completed_fits=result.get("completed_fits", 0) if isinstance(result, Mapping) else 0,
+                    expected_fits=result.get("expected_fits") if isinstance(result, Mapping) else None,
+                    expected_fits_max=result.get("expected_fits_max") if isinstance(result, Mapping) else None,
+                    stage="cached_result_integrity", error_type=type(exc).__name__,
+                    error_category="integrity")
+            raise
         atomic_json(output / "result.json", result)
         if not smoke:
             atomic_json(output / "evaluation" / "metrics.json", result["metrics"])
@@ -797,8 +1117,10 @@ def run_neural_study(
                     "expected_fits": expected_fits,
                     "expected_fits_max": expected_fits_max,
                     "oof_rows": 0,
+                    "member_fit_count": completed_fits,
                     "selected_beta": selection["selected_beta"],
                 })
+                _require_verified_result(smoke_result, dataset_all, splits, identity)
                 b_store.json(result_name, smoke_result)
                 atomic_json(output / "result.json", smoke_result)
                 report_status("smoke_complete", completed=completed_fits,
@@ -971,7 +1293,7 @@ def run_neural_study(
                     beta0_oof.extend(rows)
                 if beta == selected_beta:
                     selected_oof.extend(rows)
-                if beta == 0.5:
+                if beta == 0.5 and selected_beta == 0.5:
                     selected_beta05_oof.extend(rows)
 
         expected_cases = tuple(splits.get("case_ids", dataset_all.case_ids))
@@ -983,10 +1305,6 @@ def run_neural_study(
             "B1_beta0_control": _metric_report(beta0_oof, dataset_all, outer_folds),
             "B1_selected": _metric_report(selected_oof, dataset_all, outer_folds),
         }
-        if len(selected_beta05_oof) == len(expected_cases):
-            metrics["B1_beta05_selected_folds"] = _metric_report(
-                selected_beta05_oof, dataset_all, outer_folds,
-            )
         result = {
             "phase": "complete",
             "study_id": study_id,
@@ -1025,6 +1343,7 @@ def run_neural_study(
             raise RuntimeError(
                 f"Completed B1 fits {completed_fits} differ from the selected-beta requirement {expected_fits}."
             )
+        _require_verified_result(result, dataset_all, splits, identity)
         b_store.json(result_name, result)
         atomic_json(output / "result.json", result)
         atomic_json(output / "evaluation" / "metrics.json", metrics)
