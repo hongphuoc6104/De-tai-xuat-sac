@@ -17,7 +17,7 @@ from .dual_member import prepare_member_states
 from .dual_mil import make_novelty_model_factory, novelty_model_identity
 from .dual_novelty import equal_weight_member_ensemble
 from .io import atomic_json, fingerprint
-from .mil_checkpoint import CheckpointStore
+from .mil_checkpoint import CheckpointStore, FitLock, FitLockError
 from .mil_model import ModelConfig
 from .mil_study import metrics as case_metrics
 from .mil_training import TrainConfig, evaluate, run_fit, source_fingerprint
@@ -33,6 +33,46 @@ def _beta_key(beta: float) -> str:
     if beta == 0.5:
         return "beta_0p5"
     raise ValueError("B1 beta must be 0.0 or 0.5.")
+
+
+def _gpu_lock_path(device_index: int) -> Path:
+    if isinstance(device_index, bool) or not isinstance(device_index, int) or device_index < 0:
+        raise ValueError("CUDA device index must be a nonnegative integer.")
+    return Path(f"/tmp/histology-dual-gpu-{device_index}")
+
+
+def _error_category(error: BaseException | str) -> str:
+    if isinstance(error, str):
+        lowered = error.lower()
+        if "memory" in lowered or "outofmemory" in lowered or "cuda" in lowered:
+            return "resource"
+        if "oserror" in lowered or "ioerror" in lowered:
+            return "io"
+        return "runtime"
+    if isinstance(error, FitLockError):
+        return "concurrency"
+    if isinstance(error, (OSError, IOError)):
+        return "io"
+    if isinstance(error, MemoryError):
+        return "resource"
+    if isinstance(error, RuntimeError) and "out of memory" in str(error).lower():
+        return "resource"
+    return "runtime"
+
+
+def _fit_recovery_evidence(
+    fit_dir: Path,
+    b_store: ArtifactStore,
+    evidence_map: Mapping[str, Mapping[str, Any]] | None,
+) -> dict[str, Any] | None:
+    if not evidence_map:
+        return None
+    try:
+        relative = fit_dir.absolute().relative_to(b_store.root.absolute()).as_posix()
+    except ValueError as exc:
+        raise ValueError("Recovery evidence requires member fit paths under the B ArtifactStore root.") from exc
+    evidence = evidence_map.get(relative)
+    return dict(evidence) if evidence is not None else None
 
 
 def select_beta(inner_bce_by_beta: Mapping[float, Sequence[float]], *, minimum_improvement: float = 0.01) -> dict[str, Any]:
@@ -320,10 +360,11 @@ def _metric_report(rows: Sequence[Mapping[str, Any]], dataset_all: Any,
     }
 
 
-def _status(output: Path, *, phase: str, study_id: str, completed_fits: int, expected_fits: int,
+def _status(output: Path, *, phase: str, study_id: str, completed_fits: int,
+            expected_fits: int | None, expected_fits_max: int | None = None,
             **extra: Any) -> dict[str, Any]:
     value = {"phase": phase, "study_id": study_id, "completed_fits": completed_fits,
-             "expected_fits": expected_fits, **extra}
+             "expected_fits": expected_fits, "expected_fits_max": expected_fits_max, **extra}
     atomic_json(output / "status.json", value)
     return value
 
@@ -367,6 +408,8 @@ def _fit_validation_member(
     model_factory: Callable[[TrainConfig], torch.nn.Module],
     model_identity: dict[str, Any],
     deadline: float,
+    recover_stale_lock: bool,
+    lock_recovery_evidence: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     train_dataset = dataset_factory(member["head_train_ids"])
     validation_dataset = dataset_factory(validation_ids)
@@ -380,6 +423,8 @@ def _fit_validation_member(
         config,
         fit_identity=fit_identity,
         deadline=min(deadline, time.monotonic() + 600.0) if config.mode == "smoke" else deadline,
+        recover_stale_lock=recover_stale_lock,
+        lock_recovery_evidence=lock_recovery_evidence,
         model_factory=model_factory,
         model_identity=model_identity,
     )
@@ -405,6 +450,9 @@ def run_neural_study(
     device: str = "cuda",
     max_epochs: int = 30,
     smoke: bool = False,
+    *,
+    recover_stale_lock: bool = False,
+    recovery_evidence_map: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Run nested β=0/.5 member ensembles, fresh refits, and paired OOF predictions.
 
@@ -419,6 +467,15 @@ def run_neural_study(
         raise TypeError("shared_store and b_store must be verified ArtifactStore instances.")
     if not isinstance(smoke, bool):
         raise TypeError("smoke must be boolean.")
+    if not isinstance(recover_stale_lock, bool):
+        raise TypeError("recover_stale_lock must be boolean.")
+    if recovery_evidence_map is not None:
+        if not isinstance(recovery_evidence_map, Mapping) or any(
+            not isinstance(key, str) or not isinstance(value, Mapping)
+            for key, value in recovery_evidence_map.items()
+        ):
+            raise TypeError("recovery_evidence_map must map B-store-relative fit paths to evidence objects.")
+        recovery_evidence_map = {key: dict(value) for key, value in recovery_evidence_map.items()}
     if device not in {"cpu", "cuda"}:
         raise ValueError("device must be cpu or cuda; no fallback is permitted.")
     if isinstance(max_epochs, bool) or not isinstance(max_epochs, int) or not 1 <= max_epochs <= 30:
@@ -435,6 +492,8 @@ def run_neural_study(
             raise ValueError("Production B1 runs require the explicitly requested CUDA device.")
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA is unavailable; refusing CPU fallback for production B1.")
+    if device == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable for the requested B1 device; refusing fallback.")
     outer_folds = _validate_nested_splits(dataset_all, splits, smoke=smoke)
     split_id = str(splits.get("split_id", fingerprint(splits)))
     source_identity = source_map.get("source_identity")
@@ -484,27 +543,55 @@ def run_neural_study(
             atomic_json(output / "evaluation" / "oof_predictions.json", result["oof_predictions"])
         _status(output, phase=result["phase"], study_id=study_id,
                 completed_fits=result.get("completed_fits", result.get("member_fit_count", 0)),
-                expected_fits=result.get("expected_fits", 0),
+                expected_fits=result.get("expected_fits"),
+                expected_fits_max=result.get("expected_fits_max"),
                 outer_refits_performed=result.get("outer_refits_performed", False),
                 oof_rows=result.get("oof_rows", 0),
                 selected_beta_by_outer=result.get("selected_beta_by_outer", {}))
         return result
 
-    estimated_inner = sum(
+    estimated_inner_fits = sum(
         len([case for case in inner["train_cases"] if dataset_all.records[case]["target"] == 0])
         for outer in outer_folds for inner in outer["inner_folds"]
     ) * len(_BETAS)
-    estimated_outer = sum(
-        len([case for case in outer["train_cases"] if dataset_all.records[case]["target"] == 0]) * 3
+    outer_beta0_fits = sum(
+        len([case for case in outer["train_cases"] if dataset_all.records[case]["target"] == 0])
         for outer in outer_folds
     )
-    expected_fits = estimated_inner + (0 if smoke else estimated_outer)
+    expected_fits_max = estimated_inner_fits if smoke else estimated_inner_fits + 2 * outer_beta0_fits
+    expected_fits: int | None = None
     completed_fits = 0
     inner_reports: dict[int, dict[int, dict[float, dict[str, Any]]]] = {}
     selections: dict[int, dict[str, Any]] = {}
-    _status(output, phase="running", study_id=study_id, completed_fits=completed_fits,
-            expected_fits=expected_fits, stage="preflight")
+
+    def report_status(phase: str, *, completed: int, expected: int | None, **extra: Any) -> dict[str, Any]:
+        return _status(
+            output,
+            phase=phase,
+            study_id=study_id,
+            completed_fits=completed,
+            expected_fits=expected,
+            expected_fits_max=expected_fits_max,
+            **extra,
+        )
+
+    gpu_owner_lock: FitLock | None = None
+    if device == "cuda":
+        try:
+            device_index = torch.cuda.current_device()
+            gpu_owner_lock = FitLock(
+                _gpu_lock_path(device_index),
+                owner_id=f"B1:{study_id}",
+                recover_stale=True,
+            )
+            gpu_owner_lock.acquire()
+        except Exception as exc:
+            report_status("error", completed=completed_fits, expected=expected_fits,
+                          stage="gpu_owner_lock", error_type=type(exc).__name__,
+                          error_category=_error_category(exc))
+            raise
     try:
+        report_status("running", completed=completed_fits, expected=expected_fits, stage="preflight")
         for outer in outer_folds:
             check_deadline(deadline)
             outer_index = outer["fold"]
@@ -536,8 +623,8 @@ def run_neural_study(
                             deadline,
                         )
                     except TimeoutError:
-                        return _status(output, phase="paused_budget", study_id=study_id,
-                                       completed_fits=completed_fits, expected_fits=expected_fits,
+                        return report_status("paused_budget", completed=completed_fits,
+                                       expected=expected_fits,
                                        next_scope=scope, next_stage="member_state", next_anchor_token=fingerprint(anchor))
                     members.append(member)
                 inner_reports[outer_index][inner_index] = {}
@@ -575,8 +662,7 @@ def run_neural_study(
                             output, stage="inner", outer=outer_index, inner=inner_index,
                             beta=beta, member_id=member["member_id"],
                         )
-                        _status(output, phase="running", study_id=study_id,
-                                completed_fits=completed_fits, expected_fits=expected_fits,
+                        report_status("running", completed=completed_fits, expected=expected_fits,
                                 stage="inner_fit", scope=scope, beta=beta,
                                 member_id=member["member_id"])
                         try:
@@ -591,16 +677,24 @@ def run_neural_study(
                                 model_factory=model_factory,
                                 model_identity=model_identity,
                                 deadline=deadline,
+                                recover_stale_lock=recover_stale_lock,
+                                lock_recovery_evidence=_fit_recovery_evidence(
+                                    fit_dir, b_store, recovery_evidence_map,
+                                ),
                             )
                         except TimeoutError:
-                            return _status(output, phase="paused_budget", study_id=study_id,
-                                           completed_fits=completed_fits, expected_fits=expected_fits,
+                            return report_status("paused_budget", completed=completed_fits,
+                                           expected=expected_fits,
                                            next_fit=fit_identity)
                         if fit.get("phase") != "complete" or predictions is None:
-                            return _status(output, phase=fit.get("phase", "attention_required"),
-                                           study_id=study_id, completed_fits=completed_fits,
-                                           expected_fits=expected_fits, next_fit=fit_identity,
-                                           checkpoint_epoch=fit.get("epoch"))
+                            phase = fit.get("phase", "attention_required")
+                            error_fields = ({
+                                "error_type": fit.get("error_type", "RuntimeError"),
+                                "error_category": _error_category(fit.get("error_type", "RuntimeError")),
+                            } if phase == "error" else {})
+                            return report_status(phase, completed=completed_fits,
+                                           expected=expected_fits, next_fit=fit_identity,
+                                           checkpoint_epoch=fit.get("epoch"), **error_fields)
                         completed_fits += 1
                         member_predictions.append(predictions)
                         member_ids.append(member["member_id"])
@@ -646,12 +740,10 @@ def run_neural_study(
                         "predictions": ensemble,
                         "ensemble_bce": bce,
                     })
-                    _status(
-                        output,
-                        phase="running",
-                        study_id=study_id,
-                        completed_fits=completed_fits,
-                        expected_fits=expected_fits,
+                    report_status(
+                        "running",
+                        completed=completed_fits,
+                        expected=expected_fits,
                         stage="inner_complete",
                         scope=scope,
                         beta=beta,
@@ -678,6 +770,9 @@ def run_neural_study(
                 },
             })
             if smoke:
+                expected_fits = estimated_inner_fits
+                if completed_fits != expected_fits:
+                    raise RuntimeError("Completed smoke inner fits differ from their exact expected count.")
                 smoke_result = {
                     "phase": "smoke_complete",
                     "study_id": study_id,
@@ -700,16 +795,27 @@ def run_neural_study(
                 smoke_result.update({
                     "completed_fits": completed_fits,
                     "expected_fits": expected_fits,
+                    "expected_fits_max": expected_fits_max,
                     "oof_rows": 0,
                     "selected_beta": selection["selected_beta"],
                 })
                 b_store.json(result_name, smoke_result)
                 atomic_json(output / "result.json", smoke_result)
-                _status(output, phase="smoke_complete", study_id=study_id,
-                        completed_fits=completed_fits, expected_fits=expected_fits,
+                report_status("smoke_complete", completed=completed_fits,
+                        expected=expected_fits,
                         outer_refits_performed=False, oof_rows=0,
                         selected_beta=selection["selected_beta"])
                 return smoke_result
+
+        selected_outer_beta05_fits = sum(
+            len([case for case in outer["train_cases"] if dataset_all.records[case]["target"] == 0])
+            for outer in outer_folds if selections[outer["fold"]]["selected_beta"] == 0.5
+        )
+        expected_fits = estimated_inner_fits + outer_beta0_fits + selected_outer_beta05_fits
+        if completed_fits != estimated_inner_fits:
+            raise RuntimeError("Completed inner fits differ from their predeclared count.")
+        report_status("running", completed=completed_fits, expected=expected_fits,
+                      stage="outer_refits_ready", selected_outer_beta05_fits=selected_outer_beta05_fits)
 
         beta0_oof: list[dict[str, Any]] = []
         selected_oof: list[dict[str, Any]] = []
@@ -740,8 +846,8 @@ def run_neural_study(
                         deadline,
                     ))
                 except TimeoutError:
-                    return _status(output, phase="paused_budget", study_id=study_id,
-                                   completed_fits=completed_fits, expected_fits=expected_fits,
+                    return report_status("paused_budget", completed=completed_fits,
+                                   expected=expected_fits,
                                    next_scope=outer_scope, next_stage="member_state", next_anchor_token=fingerprint(anchor))
             if not members:
                 raise ValueError(f"Outer refit scope {outer_scope} has no negative bank members.")
@@ -787,8 +893,7 @@ def run_neural_study(
                     )
                     train_dataset = dataset_factory(member["head_train_ids"])
                     _validate_dataset_view(train_dataset, member["head_train_ids"], name="outer member head training")
-                    _status(output, phase="running", study_id=study_id,
-                            completed_fits=completed_fits, expected_fits=expected_fits,
+                    report_status("running", completed=completed_fits, expected=expected_fits,
                             stage="outer_refit", scope=outer_scope, beta=beta,
                             member_id=member["member_id"], epochs=refit_epochs)
                     try:
@@ -799,18 +904,26 @@ def run_neural_study(
                             config,
                             fit_identity=fit_identity,
                             deadline=deadline,
+                            recover_stale_lock=recover_stale_lock,
+                            lock_recovery_evidence=_fit_recovery_evidence(
+                                fit_dir, b_store, recovery_evidence_map,
+                            ),
                             model_factory=model_factory,
                             model_identity=model_identity,
                         )
                     except TimeoutError:
-                        return _status(output, phase="paused_budget", study_id=study_id,
-                                       completed_fits=completed_fits, expected_fits=expected_fits,
+                        return report_status("paused_budget", completed=completed_fits,
+                                       expected=expected_fits,
                                        next_fit=fit_identity)
                     if fit.get("phase") != "complete":
-                        return _status(output, phase=fit.get("phase", "attention_required"),
-                                       study_id=study_id, completed_fits=completed_fits,
-                                       expected_fits=expected_fits, next_fit=fit_identity,
-                                       checkpoint_epoch=fit.get("epoch"))
+                        phase = fit.get("phase", "attention_required")
+                        error_fields = ({
+                            "error_type": fit.get("error_type", "RuntimeError"),
+                            "error_category": _error_category(fit.get("error_type", "RuntimeError")),
+                        } if phase == "error" else {})
+                        return report_status(phase, completed=completed_fits,
+                                       expected=expected_fits, next_fit=fit_identity,
+                                       checkpoint_epoch=fit.get("epoch"), **error_fields)
                     completed_fits += 1
                     model = _load_model(fit_dir, config, model_factory, model_identity, best=False)
                     test_dataset = dataset_factory(outer["test_cases"])
@@ -820,8 +933,8 @@ def run_neural_study(
                             model, test_dataset, device, config=config, deadline=deadline,
                         )["predictions"]
                     except TimeoutError:
-                        return _status(output, phase="paused_budget", study_id=study_id,
-                                       completed_fits=completed_fits, expected_fits=expected_fits,
+                        return report_status("paused_budget", completed=completed_fits,
+                                       expected=expected_fits,
                                        next_prediction=fit_identity)
                     refit_predictions[beta].append(predictions)
                     refit_member_ids[beta].append(member["member_id"])
@@ -907,19 +1020,30 @@ def run_neural_study(
         }
         result["completed_fits"] = completed_fits
         result["expected_fits"] = expected_fits
+        result["expected_fits_max"] = expected_fits_max
+        if completed_fits != expected_fits:
+            raise RuntimeError(
+                f"Completed B1 fits {completed_fits} differ from the selected-beta requirement {expected_fits}."
+            )
         b_store.json(result_name, result)
         atomic_json(output / "result.json", result)
         atomic_json(output / "evaluation" / "metrics.json", metrics)
         atomic_json(output / "evaluation" / "oof_predictions.json", result["oof_predictions"])
-        _status(output, phase="complete", study_id=study_id,
-                completed_fits=completed_fits, expected_fits=expected_fits,
+        report_status("complete", completed=completed_fits, expected=expected_fits,
                 outer_refits_performed=True, oof_rows=len(expected_cases),
                 selected_beta_by_outer=result["selected_beta_by_outer"])
         return result
     except TimeoutError:
-        return _status(output, phase="paused_budget", study_id=study_id,
-                       completed_fits=completed_fits, expected_fits=expected_fits,
+        return report_status("paused_budget", completed=completed_fits, expected=expected_fits,
                        stage="neural_study")
+    except Exception as exc:
+        report_status("error", completed=completed_fits, expected=expected_fits,
+                      stage="neural_study", error_type=type(exc).__name__,
+                      error_category=_error_category(exc))
+        raise
+    finally:
+        if gpu_owner_lock is not None:
+            gpu_owner_lock.release()
 
 
 __all__ = ["outer_epoch_budget", "run_neural_study", "select_beta"]
