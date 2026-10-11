@@ -61,3 +61,14 @@ jobs:
             --output /tmp/feature-fixture/out --work-root /tmp/feature-fixture/scratch \
             --weights-dir /tmp/histology-feature-weights
       - run: python -m pytest tests/test_feature_sources.py tests/test_features.py tests/test_feature_notebook.py tests/test_feature_encoder.py
+  dual-track-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -r requirements-pretrain.txt pytest
+      - name: Verify scopes, photo lineage, clustering, novelty, nested studies and resume
+        run: python -m pytest tests/test_dual_*.py

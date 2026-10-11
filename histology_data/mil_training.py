@@ -90,6 +90,7 @@ def source_fingerprint() -> str:
     names = ("mil_model.py", "mil_data.py", "mil_checkpoint.py", "mil_training.py", "mil_study.py", "mil_outputs.py",
              "mil_case_cache.py",
              "bags.py", "readiness.py", "splits.py", "features.py", "io.py", "dual_novelty.py", "dual_mil.py")
+    names = tuple(sorted(set(names) | {path.name for path in root.glob("dual_*.py")}))
     return fingerprint({name: file_hash(root / name) for name in names})
 
 

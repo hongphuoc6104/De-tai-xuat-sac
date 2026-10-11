@@ -68,3 +68,7 @@ worktrees/
 # OS / Editor
 .DS_Store
 Thumbs.db
+
+# Private dual-track study fixtures, memberships and model artifacts
+/Results/clustering_dual/
+*.pkl
