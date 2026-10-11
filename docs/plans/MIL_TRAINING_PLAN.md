@@ -167,3 +167,11 @@ Model refit demo trên toàn development cohort chỉ thực hiện theo cấu h
 |---|---|---|
 | 1.0 | 11/10/2026 | Lưu thiết kế train E0–E4, nested protocol, T0–T7 và phụ lục nguyên lý. |
 | 1.1 | 11/10/2026 | Bổ sung train loop nhẹ local trước Colab, risk register, fault-injection/resume, giới hạn tài nguyên và gates local/CPU/T4; không tạo VM hoặc chạy training. |
+
+## Nghiên cứu tối ưu T4 sau baseline
+
+Xem [MIL_T4_OPTIMIZATION_PLAN.md](MIL_T4_OPTIMIZATION_PLAN.md). Các đề xuất cache tensor GPU, AMP FP16 và giảm chiều head là nhánh riêng, chưa thay đổi vòng 45-fit đang chạy. Pilot cache SSD đã qua T4 với hai epoch 4,026/3,272 giây, so với 57,104/56,594 giây ở lượt không có cache theo ca. Khóa dữ liệu/folds và chọn cấu hình bằng inner-validation; không dùng outer OOF để tune.
+
+## Nghiệm thu baseline common ngày 11/10/2026
+
+45/45 fits và 80 OOF predictions đã hoàn tất trên T4; 711 checkpoint commits, dữ liệu/fold/identity/checksum/prediction/attention đã verify. Chất lượng baseline chưa đạt; giữ nguyên protocol và không đổi threshold theo outer-test. Đây là nghiên cứu common16, chưa là model triển khai full-cohort hoặc nghiên cứu all18. Xem báo cáo private tại Results/training_preflight/completed/BAO_CAO_HOAN_TAT.md. Các đề xuất AMP/GPU tensor cache/nén head chưa triển khai.

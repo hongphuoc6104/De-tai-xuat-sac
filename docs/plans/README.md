@@ -20,3 +20,5 @@ Bằng chứng kiểm kê và hình minh họa được lưu trong `Results/plan
 - [Hướng dẫn extractor](../../dist/HUONG_DAN_CHAY.md) và [Notebook features bàn giao](../../dist/Colab_Feature_Extraction.ipynb): ResNet50 ImageNet V1 frozen chạy theo ZIP hoặc thư mục PNG.
 
 Snapshot nghiệm thu 11/10/2026: nguồn 25 ZIP/148.991 vector giữ nguyên; governance 18 người, nhãn 10/8; duplicate review đã xong. Hai bundle common16/all18 đã build/verify `data_ready` trên CPU thiha; loader 34/34 lượt ca qua. Xem [báo cáo hoàn tất](../../Results/planning_20261010/pretrain/final_verified_20261011/BAO_CAO_HOAN_TAT.md). Chưa train MIL; tự tắt máy vẫn đã hủy.
+
+- [MIL_T4_OPTIMIZATION_PLAN.md](MIL_T4_OPTIMIZATION_PLAN.md): nghiên cứu cache GPU/AMP/nén head, benchmark và cổng đánh giá; chưa triển khai vào baseline.

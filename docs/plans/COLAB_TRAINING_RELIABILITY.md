@@ -165,3 +165,7 @@ Nguồn chính thức, đối chiếu 11/10/2026:
 - [ ] C0/C1: kernel/Drive/dependencies và T4 smoke qua.
 - [ ] C2: full-bag pilot, memory/time/checkpoint benchmark và budget schedule qua.
 - [ ] Chỉ sau đó bắt đầu C3: study chính theo MIL_TRAINING_PLAN.md.
+
+## Nghiệm thu môi trường thật 11/10/2026
+
+GPU smoke, Drive checkpoint và new-process resume đã qua trên T4/Torch2.11.0+cu130. Full-bag cached pilot qua; study common hoàn tất45fits/80OOF,711commits đã verify. Chất lượng dự đoán là kết quả nghiên cứu riêng, không phải tiêu chí để gọi software gates đã fail. T4 được đóng sau writer-stop và official Drive flush; không khởi tạo thêm VM hoặc shutdown máyNa.
