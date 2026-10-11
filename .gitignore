@@ -43,8 +43,11 @@ env/
 *.h5
 *.hdf5
 *.safetensors
-/Results/planning_*/
+/Results/planning_*
 /Results/research_*/
+/Results/training_preflight/
+/Results/training_runs/
+/Results/proofs/mil_*.log
 /Results/Step1_Overview_results/*.csv
 /Results/Step1_Overview_results/*.log
 /Results/proofs/test_evidence_*.log

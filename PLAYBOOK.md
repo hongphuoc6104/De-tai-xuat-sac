@@ -132,3 +132,6 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Giả định sai (Wrong Assumptions):** Lùi đồng hồ 345 phút luôn tạo 345 phút runtime trong ngày được bộ đếm tính.
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng `local_day_bounds(now)` làm thời điểm bắt đầu và ngân sách profile cô lập một phút để cảnh báo có thể đạt ở mọi giờ. Test tái hiện pass sau sửa; toàn bộ `tests/test_colab_manager.py` pass 16 tests. Station 2 xác nhận test này pass; các lỗi còn lại của lần chạy đó thuộc pretrain do scikit-learn cài đặt là 1.9.0 trong khi mã yêu cầu 1.8.0.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Test bộ đếm theo ngày phải tạo timestamp và budget theo ranh giới lịch mà implementation sử dụng, không giả định thời lượng runtime vượt qua nửa đêm vẫn được tính trong cùng ngày.
+
+- [ERR-20261011-03..06] Mount/kernel, Monaco, artifact transfer và official Drive flush: xem [.agents/skills/colab-runtime-recovery/SKILL.md](.agents/skills/colab-runtime-recovery/SKILL.md).
+- [ERR-20261011-07..11] MIL bundle integration, read-only tensors, identity, deadlines và checkpoint commit: xem [.agents/skills/histology-mil/SKILL.md](.agents/skills/histology-mil/SKILL.md).

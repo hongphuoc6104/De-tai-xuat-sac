@@ -1,6 +1,12 @@
 # Kế hoạch tham chiếu: phân loại mô học bằng MIL nhiều độ phóng đại
 
-> **Vai trò tài liệu:** bản tham chiếu chính để phát triển và giám sát dự án. Số liệu và hiện trạng là snapshot ngày 10/10/2026. Các thông số mô hình/CV là thiết kế dự kiến, chưa phải kết quả thực thi. Khi thay đổi thiết kế hoặc chốt thông tin dữ liệu, cập nhật phiên bản và ghi lý do ở lịch sử thay đổi.
+> **Vai trò tài liệu:** bản tham chiếu tổng quát để phát triển và giám sát dự án. Phần hiện trạng v1.4 bên dưới là snapshot lịch sử ngày 10/10/2026. Ưu tiên cập nhật mới nhất và kế hoạch giai đoạn được liên kết ngay dưới đây. Các thông số mô hình/CV là thiết kế dự kiến, chưa phải kết quả huấn luyện. Khi thay đổi thiết kế hoặc chốt thông tin dữ liệu, cập nhật phiên bản và ghi lý do ở lịch sử thay đổi.
+
+**Cập nhật v1.5 · 11/10/2026:** dữ liệu trước train đã nghiệm thu: cache 148.991 vector, common 16 ca/146.506 instance và all 18 ca/148.990 instance; hai bundle và nested folds 3×2 đã verify, loader 34/34 lượt ca qua. [Bằng chứng nghiệm thu](../../Results/planning_20261010/pretrain/final_verified_20261011/BAO_CAO_HOAN_TAT.md). MIL chưa train.
+
+**Kế hoạch thực thi G6–G8:** [MIL_TRAINING_PLAN.md](MIL_TRAINING_PLAN.md), cùng [phụ lục kiến trúc/nguyên lý](MIL_MODEL_EXPLAINED.md). Kế hoạch này là tham chiếu hiện hành cho phát triển trainer, dry-run/checkpoint, benchmark T4, nested fits và đánh giá; các trạng thái “đang chạy/chưa hoàn tất” ở snapshot v1.4 dưới đây không còn là tiến độ hiện tại.
+
+**Bổ sung 11/10/2026:** [kiểm thử local → Colab Free và phục hồi sự cố](COLAB_TRAINING_RELIABILITY.md). Người dùng cho phép train loop CPU nhẹ, có cap, trên máy trước; full-bag/GPU/study chính vẫn chạy Colab. Các failure tests và T4 benchmark chưa được thực thi.
 
 **Phiên bản kế hoạch 1.4 · 10/10/2026.** Đây là thiết kế dự kiến để giám sát và triển khai; chưa có kết quả huấn luyện hoặc đánh giá MIL. Smoke feature encoder trên T4 đã qua, còn production extraction và full feature audit đang chạy. Các phép đo truyền dữ liệu và đóng gói dưới đây là benchmark I/O, không phải thời gian chạy encoder hay mô hình MIL.
 
@@ -408,5 +414,5 @@ Số liệu bộ dữ liệu và cache là kiểm kê/tính toán riêng của d
 | 1.1 | 10/10/2026 | Cập nhật kết quả kiểm kê ZIP, smoke thật và bộ import precut/Colab; full import/encode/train vẫn chưa chạy. |
 | 1.2 | 10/10/2026 | Gắn Drive đúng tài khoản, đo I/O, giữ 8 ZIP đóng lại đã commit; chuyển sang người dùng tải ZIP gốc 002–025. Phân biệt hai nguồn và ngân sách T4 330 phút/ngày. |
 | 1.3 | 10/10/2026 | Thêm frozen ResNet50 feature runner, ZIP/directory, partial uploads, budget/resume/audit và notebook tự chạy. CPU real-six smoke qua; T4/full cache/MIL chưa chạy. |
-
 | 1.4 | 10/10/2026 | Cập nhật transform ImageNet V1 thực tế (resize cạnh ngắn 256, center-crop 224); ghi nhận xác nhận người bệnh/nhãn, Drive đủ 25 ZIP, smoke T4 hoàn tất và production đang chạy với source plan 24 ZIP trước khi resume 25; thêm kế hoạch G0–G5/readiness. Full cache, audit và bundle chưa hoàn tất; chưa huấn luyện MIL. |
+| 1.5 | 11/10/2026 | Ghi nhận nghiệm thu dữ liệu/cache, hai bundle và folds/loader; liên kết kế hoạch train MIL T0–T7 cùng phụ lục nguyên lý. Giữ snapshot v1.4 làm lịch sử; MIL chưa huấn luyện. |
