@@ -63,3 +63,27 @@
 - **Wrong Assumptions:** Verify là thao tác read-only ở mọi API.
 - **Resolution & Proof:** Verify đầy đủ trên mirror tạm bằng `verify_source_readonly`; giữ source tree hashes nguyên vẹn. Cached và uncached study cho cùng weights, OOF, tile order; toàn bộ 327 tests pass.
 - **Golden Prevention Rule:** Phân biệt verifier có side effects với consumer chỉ đọc; kiểm immutability trên E2E, không chỉ array contents.
+
+## [ERR-20261011-15] Báo cáo phân cụm mất định danh cấu hình và truy hồi điểm mẫu
+- **Symptom:** Kết quả v001 thiếu algorithm/config trong từng metric; v002 có điểm biểu đồ nhưng chưa có khóa nối từng điểm đến tile nguồn.
+- **Reproduction Path:** `Results/training_preflight/clustering_comparison_full/metric_schema_reproduction.json` và `sample_trace_reproduction.json`, kiểm trực tiếp artifact full Colab trước mỗi sửa.
+- **Root Cause:** Serializer chỉ xuất số đo và tọa độ, chưa coi định danh cấu hình và lineage là phần bắt buộc của output contract.
+- **Wrong Assumptions:** Thứ tự danh sách đủ để xác định cấu hình; prototype refs đủ để truy hồi mọi điểm.
+- **Resolution & Proof:** Mỗi metric có algorithm/config_id/config; sample assignments có sample_row_index, sidecar nối (lens,index) đến tile/part/row. Full v003: 36 candidates, 109.248 assignments nối 9.104 provenance rows; 48 shards đủ 146.506 dòng, hashes/CRC và kết quả v002 khớp. Proof: `Results/training_preflight/clustering_comparison_full/verification_full_v003.json`; synthetic E2E: `clustering_design/synthetic_schema_smoke.json`.
+- **Golden Prevention Rule:** Báo cáo thực nghiệm phải tự định danh cấu hình và truy hồi từng observation; kiểm join một-một và hash sau serialization, không chỉ trong RAM.
+
+## [ERR-20261011-16] Tên ảnh cluster noise va chạm với cluster dương
+- **Symptom:** Slug('-1') và slug('1') cùng thành '1', có thể ghi đè montage noise bằng montage cluster 1.
+- **Reproduction Path:** `Results/training_preflight/clustering_comparison_full/RETRIEVAL_AUDIT.md`, tái hiện file output va chạm trước sửa trong helper phân tích riêng.
+- **Root Cause:** Chuẩn hóa filename bỏ dấu âm, không kiểm tính duy nhất theo khóa group.
+- **Wrong Assumptions:** Slug của khóa group là ánh xạ một-một.
+- **Resolution & Proof:** Thêm digest theo nguyên group, chặn collision và hàng khác group. Hai E2E regression pass; ruff/compile pass. 30 ảnh đã bàn giao không có group noise nên không bị ảnh hưởng.
+- **Golden Prevention Rule:** Tên file chuẩn hóa phải kèm định danh không va chạm và guard trước ghi; không dùng slug làm khóa dữ liệu.
+
+## [ERR-20261011-17] Trình vẽ không nhận trạng thái noeligible
+- **Symptom:** Vẽ so sánh full v003 ném StopIteration khi DBSCAN 4x không có cấu hình đạt điều kiện.
+- **Reproduction Path:** `Results/training_preflight/clustering_comparison_full/chart_reproduction.json`; chạy render_report_charts.py với metrics full v003 trước sửa.
+- **Root Cause:** Consumer coi selection luôn là config_id hoặc null; producer dùng sentinel noeligible có nghĩa rõ ràng.
+- **Wrong Assumptions:** Mọi thuật toán đều có cấu hình được chọn.
+- **Resolution & Proof:** Render trạng thái noeligible thành ô giải thích, không tìm metric giả. Chạy lại cùng full metrics tạo đủ ba PNG/SVG, kiểm hình trực tiếp.
+- **Golden Prevention Rule:** Consumer phải xử lý mọi trạng thái hợp lệ của output contract; không biến không đủ điều kiện thành lỗi hoặc kết quả giả.

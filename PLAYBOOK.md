@@ -135,3 +135,12 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 
 - [ERR-20261011-03..06] Mount/kernel, Monaco, artifact transfer và official Drive flush: xem [.agents/skills/colab-runtime-recovery/SKILL.md](.agents/skills/colab-runtime-recovery/SKILL.md).
 - [ERR-20261011-07..14] MIL bundle integration, read-only tensors, identity, deadlines và checkpoint commit: xem [.agents/skills/histology-mil/SKILL.md](.agents/skills/histology-mil/SKILL.md).
+
+
+- [ERR-20261011-18..20] Weighted PCA, Ward row identity và novelty-member query ownership: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
+
+- [ERR-20261011-21..26] Artifact compute/read leases, worker error/recovery và B1 count/GPU/cache semantic: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
+
+- [ERR-20261012-01] File API upload cần parent tồn tại: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261012-27] B1 report producer/consumer và subset coverage: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).

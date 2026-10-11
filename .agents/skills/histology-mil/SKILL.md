@@ -14,3 +14,7 @@ description: Phát triển, kiểm thử và chạy MIL cấp ca từ frozen fea
 - Active lock không được lấy lại theo TTL. Recovery khác host cần receipt gắn chính xác lock và bằng chứng runtime cũ đã dừng. Không tạo VM thay thế, keep-alive giả hoặc đổi account để vượt giới hạn tài nguyên.
 - Deadline giữa validation phải trả paused, không publish epoch dở. Lỗi I/O/integrity vẫn báo rõ và giữ dữ liệu. `complete` chỉ ứng với toàn fit/study đã verify, không phải hết budget.
 - Code/CLI: `histology_data/mil_*.py`, `scripts/run_mil.py`; test: `tests/test_mil_*.py`. New runtime/notebook phải pin ZIP SHA; hoàn tất conveyor/CI trước dùng full study.
+
+## Dual-track extension
+
+Đọc [kế hoạch hai nhánh](../../../docs/plans/CLUSTERING_DUAL_TRACK_EXECUTION.md) và [lỗi đã tái hiện](references/dual_failures.md) khi dùng PCA/photo lineage, cluster histograms hoặc negative-anchor novelty/MIL. Source IDs, original folds, member anchor exclusion, shared device lease và checkpoint identity là bắt buộc; các cụm/novelty không là patch truth.

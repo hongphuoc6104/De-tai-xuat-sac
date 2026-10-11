@@ -4,6 +4,8 @@ Thư mục này lưu kế hoạch tham chiếu, lộ trình chuẩn bị dữ li
 
 ## Kế hoạch hiện tại
 
+- [Hai nhánh song song A/B](CLUSTERING_DUAL_TRACK_EXECUTION.md): atlas/histogram và negative-reference novelty/MIL; [runbook](../DUAL_TRACK_RUN.md). Source đang được phát triển/kiểm thử, full study mới chưa được báo nghiệm thu.
+
 - **Thực thi tiếp — kế hoạch train:** [`MIL_TRAINING_PLAN.md`](MIL_TRAINING_PLAN.md) — v1.1, thiết kế E0–E4, nested CV 3×2, các bước T0–T7, local→Colab, dry-run/checkpoint, benchmark T4, lưu trữ/resume, đánh giá và checklist. Đã lưu kế hoạch; chưa chạy train.
 - **Phụ lục độ tin cậy:** [`COLAB_TRAINING_RELIABILITY.md`](COLAB_TRAINING_RELIABILITY.md) — train loop nhẹ local, L0–L3/C0–C3, các rủi ro Colab Free, test lỗi giả lập F01–F12, checkpoint commit và giới hạn tài nguyên.
 - **Phụ lục nguyên lý:** [`MIL_MODEL_EXPLAINED.md`](MIL_MODEL_EXPLAINED.md) — giải thích CNN frozen, projection, gated attention, fusion, loss/gradient, custom và bài báo; [bản HTML độc lập](../../.lavish/MIL_MODEL_EXPLAINED.html).
