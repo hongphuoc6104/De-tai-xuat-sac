@@ -122,9 +122,19 @@ class MILModel(nn.Module):
         self,
         features: Mapping[str, Tensor],
         presence_mask: Sequence[bool] | None = None,
+        *,
+        attention_bias: Mapping[str, Tensor] | None = None,
     ) -> dict[str, Any]:
-        """Return a case-level logit, per-lens attention, and bag embeddings."""
+        """Return a case-level logit, per-lens attention, and bag embeddings.
+
+        ``attention_bias`` optionally adds a fixed per-instance logit to the
+        learned attention score before softmax. Omitting it preserves the
+        baseline forward path exactly.
+        """
         matrices, actual_mask = self._validate_inputs(features, presence_mask)
+        if self.config.variant == "E0" and attention_bias is not None:
+            raise ValueError("E0 mean pooling does not support attention_bias.")
+        biases = self._validate_attention_bias(attention_bias, matrices)
         missing_required = [
             lens for lens in self._used_lenses
             if lens not in matrices or matrices[lens].shape[0] == 0
@@ -140,7 +150,7 @@ class MILModel(nn.Module):
             joined = torch.cat([*(embeddings[lens] for lens in LENS_KEYS), mask])
             logit = self.classifier(self.dropout(joined)).squeeze(0)
         else:
-            embeddings, attention = self._attentive_pool(matrices)
+            embeddings, attention = self._attentive_pool(matrices, biases)
             if self.config.variant == "E4":
                 mask = self._mask_tensor(actual_mask, self.classifier.weight)
                 joined = torch.cat([*(embeddings[lens] for lens in LENS_KEYS), mask])
@@ -154,6 +164,33 @@ class MILModel(nn.Module):
         for lens, embedding in embeddings.items():
             self._require_finite(embedding, f"{lens}x embedding")
         return {"logit": logit, "attention": attention, "embeddings": embeddings}
+
+    def _validate_attention_bias(
+        self,
+        attention_bias: Mapping[str, Tensor] | None,
+        matrices: Mapping[str, Tensor],
+    ) -> dict[str, Tensor] | None:
+        if attention_bias is None:
+            return None
+        if not isinstance(attention_bias, Mapping):
+            raise TypeError("attention_bias must be a lens-keyed mapping of per-instance tensors.")
+        unknown = set(attention_bias) - set(self._used_lenses)
+        if unknown:
+            raise ValueError(f"attention_bias contains unused lens keys: {sorted(map(str, unknown))}.")
+        biases: dict[str, Tensor] = {}
+        for lens, bias in attention_bias.items():
+            matrix = matrices.get(lens)
+            if matrix is None or matrix.shape[0] == 0:
+                raise ValueError(f"attention_bias[{lens!r}] was supplied for a missing lens bag.")
+            if not isinstance(bias, Tensor):
+                raise TypeError(f"attention_bias[{lens!r}] must be a torch.Tensor.")
+            if bias.ndim != 1 or bias.shape[0] != matrix.shape[0]:
+                raise ValueError(f"attention_bias[{lens!r}] must match the full instance count.")
+            if bias.dtype != matrix.dtype or bias.device != matrix.device:
+                raise ValueError(f"attention_bias[{lens!r}] must match feature dtype and device.")
+            self._require_finite(bias, f"{lens}x attention bias")
+            biases[lens] = bias
+        return biases
 
     def _validate_inputs(
         self,
@@ -228,6 +265,7 @@ class MILModel(nn.Module):
     def _attentive_pool(
         self,
         matrices: Mapping[str, Tensor],
+        attention_bias: Mapping[str, Tensor] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         assert self.projection is not None
         embeddings: dict[str, Tensor] = {}
@@ -244,6 +282,9 @@ class MILModel(nn.Module):
             projected = self.dropout(projected)
             scores = self.attention_heads[lens](projected)
             self._require_finite(scores, f"{lens}x attention scores")
+            if attention_bias is not None and lens in attention_bias:
+                scores = scores + attention_bias[lens]
+                self._require_finite(scores, f"{lens}x biased attention scores")
             weights = torch.softmax(scores, dim=0)
             self._require_finite(weights, f"{lens}x attention")
             embeddings[lens] = torch.sum(weights.unsqueeze(-1) * projected, dim=0)

@@ -89,7 +89,7 @@ def source_fingerprint() -> str:
     root = Path(__file__).parent
     names = ("mil_model.py", "mil_data.py", "mil_checkpoint.py", "mil_training.py", "mil_study.py", "mil_outputs.py",
              "mil_case_cache.py",
-             "bags.py", "readiness.py", "splits.py", "features.py", "io.py")
+             "bags.py", "readiness.py", "splits.py", "features.py", "io.py", "dual_novelty.py", "dual_mil.py")
     return fingerprint({name: file_hash(root / name) for name in names})
 
 
@@ -171,11 +171,14 @@ def _check_resources(config: TrainConfig) -> None:
 
 
 def evaluate(
-    model: MILModel, dataset: CaseDataset, device: str, *, config: TrainConfig | None = None,
+    model: torch.nn.Module, dataset: CaseDataset, device: str, *, config: TrainConfig | None = None,
     deadline: float | None = None,
     case_callback: Callable[[Any, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Forward each case without gradients, returning case-level loss and predictions."""
+    validate_query_scope = getattr(model, "validate_query_scope", None)
+    if callable(validate_query_scope):
+        validate_query_scope(dataset)
     model.eval()
     predictions = []
     loss_sum = 0.0
@@ -209,6 +212,8 @@ def run_fit(
     lock_recovery_evidence: dict[str, Any] | None = None,
     stop_requested: Callable[[], bool] | None = None,
     event_hook: Callable[[str, dict[str, Any]], None] | None = None,
+    model_factory: Callable[[TrainConfig], torch.nn.Module] | None = None,
+    model_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run/resume one fit; only a fully committed epoch advances durable progress.
 
@@ -233,20 +238,53 @@ def run_fit(
         os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     if config.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("Requested CUDA is unavailable; refusing silent CPU fallback.")
-    output = Path(output)
-    output.mkdir(parents=True, exist_ok=True)
     torch.set_num_threads(config.num_threads)
     seed_everything(config.seed, config.deterministic)
+
+    if model_factory is None:
+        if model_identity is not None:
+            raise ValueError("model_identity is only accepted together with an explicit model_factory.")
+        model: torch.nn.Module = MILModel(config.model)
+        resolved_model_identity = {"type": "MILModel", "config": config.model.to_dict()}
+    else:
+        if not callable(model_factory):
+            raise TypeError("model_factory must be callable.")
+        if not isinstance(model_identity, dict) or not model_identity:
+            raise ValueError("Custom model_factory requires a nonempty, explicit model_identity mapping.")
+        try:
+            declared_identity = json.loads(json.dumps(model_identity, sort_keys=True, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("model_identity must be finite and JSON-serializable.") from exc
+        model = model_factory(config)
+        if not isinstance(model, torch.nn.Module):
+            raise TypeError("model_factory must return a torch.nn.Module.")
+        get_config = getattr(model, "get_config", None)
+        if not callable(get_config):
+            raise TypeError("A custom fit model must expose get_config() for identity verification.")
+        try:
+            actual_identity = json.loads(json.dumps(get_config(), sort_keys=True, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Custom model get_config() must return finite JSON-serializable data.") from exc
+        if actual_identity != declared_identity:
+            raise ValueError("model_identity does not match the model_factory output configuration.")
+        validate_fit_scope = getattr(model, "validate_fit_scope", None)
+        if callable(validate_fit_scope):
+            validate_fit_scope(train, validation, mode=config.mode)
+        resolved_model_identity = actual_identity
+
     identity = {
         "fit": fit_identity, "config": dataclasses.asdict(config), "train": train.identity,
         "validation": validation.identity if validation is not None else None,
         "train_cases": train.case_ids, "validation_cases": validation.case_ids if validation else [],
         "environment": environment(), "source_fingerprint": source_fingerprint(),
+        "model_identity": resolved_model_identity,
     }
     identity["identity_id"] = fingerprint(identity)
+    output = Path(output)
     existing_config = output / "resolved_config.json"
     if existing_config.exists() and json.loads(existing_config.read_text()) != identity:
         raise CheckpointIdentityError("Fit output belongs to another config/data/fold/environment; preserving it.")
+    output.mkdir(parents=True, exist_ok=True)
     store = CheckpointStore(output / "checkpoints", identity)
     state: dict[str, Any] = {}
 
@@ -268,7 +306,7 @@ def run_fit(
             raise CheckpointIdentityError("Fit identity changed before acquiring its writer lease.")
         atomic_json(output / "resolved_config.json", identity)
         device = torch.device(config.device)
-        model = MILModel(config.model).to(device)
+        model = model.to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
         criterion = torch.nn.BCEWithLogitsLoss()
         loaded = store.load_latest(map_location="cpu")
