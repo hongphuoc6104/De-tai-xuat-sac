@@ -1,5 +1,7 @@
 # PRETRAIN_EXECUTION — kế hoạch trước huấn luyện MIL
 
+> **Snapshot lịch sử v1.1:** trạng thái “RUNNING/IN DEVELOPMENT” bên dưới thuộc lúc trích xuất còn chạy. Kế hoạch tiếp tục và trạng thái mới nhất ở [PRETRAIN_FINALIZATION.md](PRETRAIN_FINALIZATION.md): features/governance đã hoàn tất; còn duplicate review, bags/splits và verify. Không dùng snapshot cũ để quyết định chạy lại encoder.
+
 > Kế hoạch thực thi v1.1, cập nhật ngày 10/10/2026 từ [MIL_MULTISCALE_REFERENCE.md](MIL_MULTISCALE_REFERENCE.md). Phạm vi gồm G0–G5 và kiểm tra sẵn sàng dữ liệu; không bao gồm huấn luyện MIL, đánh giá outer test hoặc báo cáo kết quả. Nhãn và danh tính người bệnh đã được người dùng xác nhận; artifact governance, split, bag và readiness vẫn cần được tạo, kiểm tra.
 
 ## Trạng thái và nguyên tắc

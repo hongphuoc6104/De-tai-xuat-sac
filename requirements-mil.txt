@@ -1,0 +1,2 @@
+-r requirements-pretrain.txt
+torch>=2.6,<3
