@@ -1,0 +1,14 @@
+After-fix synthetic E2E regression verification
+Date: 2026-10-12 (Asia/Ho_Chi_Minh)
+Command: /tmp/histology-mil-env/bin/python -m pytest -q tests/test_image_classification.py -k 'duplicate_original_bytes or same_size_crc_preserving'
+Scope: synthetic metadata, original-photo ZIPs, conflicting targets, and checksum-preserving payload rebind only.
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /data/đề tài xuất sắc/.worktrees/image-classification
+configfile: pyproject.toml
+collected 15 items / 13 deselected / 2 selected
+
+tests/test_image_classification.py ..                                    [100%]
+
+======================= 2 passed, 13 deselected in 0.61s =======================

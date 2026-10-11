@@ -26,9 +26,13 @@ def _sha256_file(path: Path) -> str:
 
 def _runtime_files(source_root: Path) -> list[tuple[Path, str]]:
     source_root = Path(source_root).resolve(strict=True)
-    candidates = list((source_root / "histology_data").glob("*.py"))
+    # Original-image classification has its own runtime and dependency graph.
+    # Its implementation must not invalidate existing MIL notebook pins.
+    candidates = [path for path in (source_root / "histology_data").glob("*.py")
+                  if not path.name.startswith("image_classification")]
     candidates.append(source_root / "scripts" / "run_mil.py")
-    candidates.extend(sorted(source_root.glob("requirements*.txt")))
+    candidates.extend(path for path in sorted(source_root.glob("requirements*.txt"))
+                      if path.name != "requirements-image-classification.txt")
     required = {
         source_root / "histology_data" / "__init__.py",
         source_root / "scripts" / "run_mil.py",

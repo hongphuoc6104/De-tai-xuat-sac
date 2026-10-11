@@ -1,0 +1,26 @@
+Before-fix synthetic E2E reproduction
+Date: 2026-10-12 (Asia/Ho_Chi_Minh)
+Command: /tmp/histology-mil-env/bin/python -m pytest -q tests/test_image_classification.py -k 'duplicate_original_bytes or same_size_crc_preserving'
+Scope: synthetic metadata and ZIP fixtures only; no clinical data or pretrained weights.
+
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /data/đề tài xuất sắc/.worktrees/image-classification
+configfile: pyproject.toml
+collected 15 items / 13 deselected / 2 selected
+
+tests/test_image_classification.py FF                                    [100%]
+
+=================================== FAILURES ===================================
+_ test_duplicate_original_bytes_with_conflicting_targets_fail_before_training __
+tests/test_image_classification.py:595: in test_duplicate_original_bytes_with_conflicting_targets_fail_before_training
+    with pytest.raises(ValueError, match="(?i)duplicate.*(content|image)|same.*content|hash.*patient"):
+E   Failed: DID NOT RAISE ValueError
+___ test_same_size_crc_preserving_payload_rebind_fails_before_feature_commit ___
+tests/test_image_classification.py:641: in test_same_size_crc_preserving_payload_rebind_fails_before_feature_commit
+    with pytest.raises(ValueError, match="(?i)(archive|source).*(sha|hash|identity|checksum)"):
+E   Failed: DID NOT RAISE ValueError
+=========================== short test summary info ============================
+FAILED tests/test_image_classification.py::test_duplicate_original_bytes_with_conflicting_targets_fail_before_training
+FAILED tests/test_image_classification.py::test_same_size_crc_preserving_payload_rebind_fails_before_feature_commit
+======================= 2 failed, 13 deselected in 1.68s =======================

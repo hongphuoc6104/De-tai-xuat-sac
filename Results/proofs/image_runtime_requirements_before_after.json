@@ -1,0 +1,18 @@
+{
+  "before": {
+    "missing_requirements_includes": [
+      "requirements-features.txt"
+    ],
+    "requirements_files": [
+      "requirements-image-classification.txt"
+    ]
+  },
+  "after": {
+    "missing_requirements_includes": [],
+    "requirements_files": [
+      "requirements-data.txt",
+      "requirements-features.txt",
+      "requirements-image-classification.txt"
+    ]
+  }
+}

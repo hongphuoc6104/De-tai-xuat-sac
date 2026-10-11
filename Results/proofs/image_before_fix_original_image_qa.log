@@ -1,0 +1,19 @@
+Original-image QA reproduction captured before image_runtime fixes
+Date: 2026-10-12 (Asia/Ho_Chi_Minh)
+Command: /tmp/histology-mil-env/bin/python -m pytest -q tests/test_image_classification.py
+Scope: synthetic Metadata.xlsx + three synthetic original-photo ZIPs; no clinical data or pretrained weights.
+
+Observed run summary (11 tests): 6 passed, 5 failed.
+
+1. Coordinate-patch guard: expected ValueError for `Tiles/<stem>/0_0.png`; no exception was raised.
+2. Full-image extraction and resume: valid synthetic TIFF decode raised
+   `ValueError: I/O operation on closed file` in PIL ImageOps.exif_transpose,
+   called from histology_data/image_classification.py::_load_member_image.
+3. Live-writer lock reproduction was blocked before reaching the injected encoder
+   because the same TIFF decode error occurred; the encoder-entry event timed out.
+4. Deadline handling wrote status state `partial` and training_ready=false, but
+   release.json still reported training_ready=true.
+
+The test runner's original output was captured in this agent turn before the
+corresponding runtime changes. This concise log preserves the observed failures;
+the complete traceback remains in the conversation tool output for that run.
