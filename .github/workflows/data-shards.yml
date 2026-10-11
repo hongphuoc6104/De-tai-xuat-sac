@@ -70,5 +70,6 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install -r requirements-pretrain.txt pytest
+      - run: python -m pip install 'matplotlib>=3.9,<4'
       - name: Verify scopes, photo lineage, clustering, novelty, nested studies and resume
         run: python -m pytest tests/test_dual_*.py
