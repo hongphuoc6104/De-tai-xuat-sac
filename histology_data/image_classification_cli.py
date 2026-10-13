@@ -69,12 +69,33 @@ def _parser() -> argparse.ArgumentParser:
     report = commands.add_parser("report", help="verify and display the saved OOF image-level report")
     report.add_argument("--study-root", type=Path, required=True)
 
+    lab = commands.add_parser("head-lab", help="fixed-patient cached weight/head/PCA studies and source review")
+    lab.add_argument("--run-root", type=Path, required=True)
+    lab.add_argument("--baseline-root", type=Path, required=True)
+    lab.add_argument("--output-root", type=Path, required=True)
+    lab.add_argument("--variants", default="patient_lr,class_lr,uniform_lr,patient_pca32,patient_pca64,per_lens_lr,per_lens_pca32")
+    lab.add_argument("--budget-minutes", type=float, default=120)
+    lab.add_argument("--reserve-minutes", type=float, default=15)
+    for lens in (4, 10, 40):
+        lab.add_argument(f"--archive-{lens}x", type=Path)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "head-lab":
+            from .image_classification_lab import run_lab
+
+            archives = {lens: getattr(args, f"archive_{lens}x") for lens in (4, 10, 40)
+                        if getattr(args, f"archive_{lens}x") is not None}
+            result = run_lab(args.run_root, args.baseline_root, args.output_root,
+                             variants=tuple(x.strip() for x in args.variants.split(",") if x.strip()),
+                             budget_minutes=args.budget_minutes, reserve_minutes=args.reserve_minutes,
+                             archives=archives or None, notify=_json_print)
+            _json_print({k: v for k, v in result.items() if k != "studies"})
+            return 0 if result["state"] == "complete" else 2
         if args.command == "inventory":
             manifest = build_original_image_inventory(OriginalImageInventoryConfig(
                 metadata=args.metadata,

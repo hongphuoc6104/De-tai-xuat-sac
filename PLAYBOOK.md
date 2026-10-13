@@ -148,3 +148,7 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261012-28..34] TIFF original-image decode, patch guard, readiness, content leakage, ZIP rebind và runtime packaging: xem [.agents/skills/image-classification/SKILL.md](.agents/skills/image-classification/SKILL.md).
 
 - [ERR-20261014-01] Reporter/producer scaler audit schema drift: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-02..05] Fixed-patient head studies: JSON replay, budget owner, per-head threshold/routing; xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-06] Cached lab archive preflight, atomic source review and complete evidence graph: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

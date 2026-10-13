@@ -12,7 +12,7 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements-data.txt scikit-learn==1.8.0 pytest "matplotlib>=3.9,<4"
       - name: Verify original-image labels, cache commits, grouped training and runtime package
-        run: python -m pytest tests/test_image_classification.py tests/test_image_classification_runtime_builder.py tests/test_image_study_report.py
+        run: python -m pytest tests/test_image_classification.py tests/test_image_classification_runtime_builder.py tests/test_image_study_report.py tests/test_image_classification_studies.py
   mil-cpu:
     runs-on: ubuntu-latest
     steps:
