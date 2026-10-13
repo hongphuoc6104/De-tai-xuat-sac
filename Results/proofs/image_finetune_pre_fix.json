@@ -1,0 +1,131 @@
+{
+  "branch": "codex/image-finetune-checkpoint",
+  "commit": "0675dd1deb646817264cb440a191c76ce320747d",
+  "epoch_selection": {
+    "best_validation_auroc_epoch": 1,
+    "best_validation_loss_epoch": 2,
+    "current_policy": "validation_loss_with_patience",
+    "deliberate_validation_auroc_by_epoch": [
+      1.0,
+      0.75,
+      0.5
+    ],
+    "selected_best_epoch": 2,
+    "validation_loss_by_epoch": [
+      0.6734407097101212,
+      0.45864560292102396,
+      0.6931471824645996
+    ]
+  },
+  "expected_patient_class_weight_scheme": {
+    "image_weights": {
+      "proof-image-0": 0.75,
+      "proof-image-1": 0.75,
+      "proof-image-2": 1.5,
+      "proof-image-3": 0.75,
+      "proof-image-4": 0.75,
+      "proof-image-5": 1.5
+    },
+    "name": "studies.sample_weights(patient_class), mass N",
+    "patient_mass_per_epoch": {
+      "negative-multi": 1.5,
+      "negative-single": 1.5,
+      "positive-multi": 1.5,
+      "positive-single": 1.5
+    },
+    "total_mass": 6.0
+  },
+  "observed_train_loop_loss_objective": {
+    "distinct_training_loss_calls": 18,
+    "effective_patient_mass_per_epoch": {
+      "negative-multi": 1.9999999999999998,
+      "negative-single": 1.0,
+      "positive-multi": 1.9999999999999998,
+      "positive-single": 1.0
+    },
+    "first_calls": [
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-3",
+        "patient_id": "positive-multi",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 1
+      },
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-1",
+        "patient_id": "negative-multi",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 0
+      },
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-5",
+        "patient_id": "positive-single",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 1
+      },
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-4",
+        "patient_id": "positive-multi",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 1
+      },
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-0",
+        "patient_id": "negative-multi",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 0
+      },
+      {
+        "effective_image_multiplier": 1.0,
+        "image_id": "proof-image-2",
+        "patient_id": "negative-single",
+        "pos_weight": [
+          1.0
+        ],
+        "reduction": "sum",
+        "target": 0
+      }
+    ],
+    "patient_class_counts": {
+      "negative_class_patients": 2,
+      "positive_class_patients": 2
+    },
+    "status_policy": "BCE pos_weight from train-only patient-class counts; no balanced sampler"
+  },
+  "phase": "before_fix",
+  "train_patient_image_counts": {
+    "negative-multi": {
+      "0": 2
+    },
+    "negative-single": {
+      "0": 1
+    },
+    "positive-multi": {
+      "1": 2
+    },
+    "positive-single": {
+      "1": 1
+    }
+  },
+  "training_image_count": 6,
+  "validation_image_count": 4
+}

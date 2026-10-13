@@ -4,11 +4,13 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pytest
 import torch
+from sklearn.metrics import roc_auc_score
 from torch import nn
 
 from histology_data import image_finetune as finetune
@@ -65,6 +67,47 @@ class TinyFrameDataset:
         return self.frames[index], self.labels[index], f"image-{index}"
 
 
+class UnequalPatientClassDataset:
+    def __init__(self) -> None:
+        self.labels = [0, 0, 0, 1, 1, 1, 0, 0, 1, 1]
+        self.frames = [torch.full((3, 8, 8), (index + 1) / 20.0) for index in range(10)]
+        self.last_index: int | None = None
+
+    def __len__(self) -> int:
+        return len(self.labels)
+
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, int, str]:
+        self.last_index = index
+        return self.frames[index], self.labels[index], f"unequal-image-{index}"
+
+
+class ScriptedAUROCTinyCNN(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fc = nn.Linear(3, 1)
+        self.training_forward_count = 0
+        self.probabilities_by_epoch = (
+            (0.49, 0.50, 0.51, 0.52),
+            (0.001, 0.60, 0.40, 0.999),
+            (0.50, 0.50, 0.50, 0.50),
+        )
+        self.validation_trace: list[list[tuple[int, float]]] = [[], [], []]
+
+    def forward(self, frames: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            self.training_forward_count += len(frames)
+            return self.fc(frames.mean(dim=(2, 3)))
+        epoch = min(max(self.training_forward_count // 6 - 1, 0), 2)
+        recovered = frames[:, 0].mean(dim=(1, 2)) * 0.229 + 0.485
+        indices = torch.round(recovered * 20).to(torch.int64) - 1 - 6
+        probabilities = torch.tensor(self.probabilities_by_epoch[epoch], dtype=torch.float32)[indices]
+        self.validation_trace[epoch].extend(
+            (int(index), float(probability))
+            for index, probability in zip(indices.tolist(), probabilities.tolist(), strict=True)
+        )
+        return torch.logit(probabilities).reshape(-1, 1)
+
+
 def _rows() -> list[dict[str, Any]]:
     rows = []
     for index, target in enumerate((0, 1, 0, 1, 0, 1, 0, 1)):
@@ -78,6 +121,25 @@ def _rows() -> list[dict[str, Any]]:
             "raw_glade": str(0 if target == 0 else 3),
         })
     return rows
+
+
+def _unequal_rows() -> list[dict[str, Any]]:
+    patients = [
+        "negative-multi", "negative-multi", "negative-single",
+        "positive-multi", "positive-multi", "positive-single",
+        "validation-negative-a", "validation-negative-b",
+        "validation-positive-a", "validation-positive-b",
+    ]
+    labels = (0, 0, 0, 1, 1, 1, 0, 0, 1, 1)
+    return [{
+        "image_id": f"unequal-image-{index}",
+        "patient_id": patients[index],
+        "image_target": target,
+        "objective_lens": 4,
+        "source_archive_sha256": hashlib.sha256(b"unequal-source-archive").hexdigest(),
+        "original_image_sha256": hashlib.sha256(f"unequal-original-{index}".encode()).hexdigest(),
+        "raw_glade": "0" if target == 0 else "3",
+    } for index, target in enumerate(labels)]
 
 
 def _model(seed: int = 800) -> TinyWholeFrameCNN:
@@ -171,9 +233,13 @@ def test_synthetic_fold_updates_only_approved_parameters_and_freezes_batch_norm(
     assert result["status"]["state"] == "complete"
     assert result["ready_for_fit"] is True
     assert result["finite_gradient_checks"] > 0
-    assert result["status"]["class_weight_basis"] == {
-        "negative_class_patients": 3,
-        "positive_class_patients": 3,
+    assert result["status"]["sample_weight_diagnostics"]["negative_class_patients"] == 3
+    assert result["status"]["sample_weight_diagnostics"]["positive_class_patients"] == 3
+    assert result["status"]["sample_weight_diagnostics"]["weight_sum"] == pytest.approx(6.0)
+    assert result["status"]["sample_weight_diagnostics"]["weight_mean"] == pytest.approx(1.0)
+    assert result["status"]["sample_weight_diagnostics"]["weight_sum_by_target"] == {
+        "0": 3.0,
+        "1": 3.0,
     }
     state = model.state_dict()
     updated = {key for key in state if not torch.equal(initial[key], state[key])}
@@ -194,6 +260,104 @@ def test_synthetic_fold_updates_only_approved_parameters_and_freezes_batch_norm(
     state = _checkpoint_state(result)
     expected_rates = [1e-3] if mode == "F0" else [1e-5, 1e-3]
     assert [group["lr"] for group in state["optimizer_state"]["param_groups"]] == expected_rates
+
+
+def test_patient_class_weights_and_inner_epoch_selection_use_mass_n_and_auroc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset = UnequalPatientClassDataset()
+    rows = _unequal_rows()
+    expected_weights = [0.75, 0.75, 1.5, 0.75, 0.75, 1.5]
+    captured: dict[str, Any] = {"weight_gradient_calls": []}
+    original_weight_function = finetune._patient_class_sample_weights
+
+    def capture_weights(rows_by_id: Any, train_ids: Any, device: torch.device) -> tuple[torch.Tensor, dict[str, Any]]:
+        weights, diagnostics = original_weight_function(rows_by_id, train_ids, device)
+        captured["sample_weights"] = weights.detach().cpu().tolist()
+        weights.requires_grad_(True)
+        weights.register_hook(
+            lambda gradient: captured["weight_gradient_calls"].append(gradient.detach().cpu().tolist())
+        )
+        return weights, diagnostics
+
+    original_bce = finetune.nn.BCEWithLogitsLoss
+
+    class RecordingBCE(original_bce):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            assert kwargs.get("reduction") == "none"
+            assert kwargs.get("pos_weight") is None
+            captured["loss_reduction"] = kwargs["reduction"]
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(finetune, "_patient_class_sample_weights", capture_weights)
+    monkeypatch.setattr(finetune.nn, "BCEWithLogitsLoss", RecordingBCE)
+    model = ScriptedAUROCTinyCNN()
+    result = train_one_image_fold(
+        model, dataset, rows,
+        [f"unequal-image-{index}" for index in range(6)],
+        [f"unequal-image-{index}" for index in range(6, 10)],
+        _config(image_size=8, batch_size=1, accumulation_steps=1, augment_whole_frame=False),
+        tmp_path / "unequal-auroc",
+        source_binding={"binding_id": "unequal-patient-class-source"},
+        device="cpu",
+    )
+
+    diagnostics = result["status"]["sample_weight_diagnostics"]
+    assert captured["sample_weights"] == pytest.approx(expected_weights)
+    assert captured["loss_reduction"] == "none"
+    assert diagnostics["scheme"] == "patient_class"
+    assert diagnostics["normalization"] == "mass_N"
+    assert diagnostics["image_count"] == diagnostics["weight_sum"] == 6
+    assert diagnostics["weight_mean"] == pytest.approx(1.0)
+    assert diagnostics["weight_sum_by_target"] == {"0": 3.0, "1": 3.0}
+    patient_masses = [row["weight_sum"] for row in diagnostics["patient_class_weight_sums"]]
+    assert patient_masses == pytest.approx([1.5, 1.5, 1.5, 1.5])
+
+    gradients = captured["weight_gradient_calls"]
+    assert len(gradients) == 18
+    observed_patient_exposures: Counter[str] = Counter()
+    weighted_loss_contributions: Counter[str] = Counter()
+    training_patients = [rows[index]["patient_id"] for index in range(6)]
+    for gradient in gradients:
+        nonzero = [index for index, value in enumerate(gradient) if abs(value) > 1e-12]
+        assert len(nonzero) == 1
+        index = nonzero[0]
+        observed_patient_exposures[training_patients[index]] += 1
+        weighted_loss_contributions[training_patients[index]] += expected_weights[index] * gradient[index]
+    assert observed_patient_exposures == {
+        "negative-multi": 6,
+        "negative-single": 3,
+        "positive-multi": 6,
+        "positive-single": 3,
+    }
+    assert all(value > 0 for value in weighted_loss_contributions.values())
+
+    validation_labels = [0, 0, 1, 1]
+    validation_auroc = [
+        roc_auc_score(validation_labels, [probability for _, probability in trace])
+        for trace in model.validation_trace
+    ]
+    saved_validation_auroc = [
+        roc_auc_score(
+            [prediction["image_target"] for prediction in epoch["validation_predictions"]],
+            [prediction["probability"] for prediction in epoch["validation_predictions"]],
+        )
+        for epoch in result["history"]
+    ]
+    validation_losses = [row["validation_loss"] for row in result["history"]]
+    assert result["selection_policy"] == "inner_validation_auroc_with_patience"
+    assert validation_auroc == pytest.approx([1.0, 0.75, 0.5])
+    assert saved_validation_auroc == pytest.approx(validation_auroc)
+    assert validation_losses[1] < validation_losses[0]
+    assert result["best_epoch"] == 1
+    assert result["best_validation_auroc"] == pytest.approx(1.0)
+    assert result["history"][1]["validation_roc_auc"] < result["history"][0]["validation_roc_auc"]
+    pointer = json.loads((Path(result["checkpoint_root"]) / "best.json").read_text(encoding="utf-8"))
+    manifest_path = Path(result["checkpoint_root"]) / "versions" / pointer["version"] / "commit.json"
+    identity = json.loads(manifest_path.read_text(encoding="utf-8"))["identity"]
+    best_state = CheckpointStore(result["checkpoint_root"], identity).load_best()
+    assert best_state["epoch"] == 1
+    assert best_state["best_metric"] == pytest.approx(1.0)
 
 
 def test_interruption_resume_matches_uninterrupted_model_optimizer_scheduler_and_rng(
@@ -241,7 +405,8 @@ def test_interruption_resume_matches_uninterrupted_model_optimizer_scheduler_and
     for key in (
         "model_state", "optimizer_state", "scheduler_state", "scaler_state", "rng",
         "train_permutation", "shuffle_generator_state", "history", "global_step",
-        "epoch", "best_metric", "best_epoch", "patience_count",
+        "epoch", "best_metric", "best_epoch", "patience_count", "selection_metric",
+        "sample_weight_policy", "sample_weight_sha256", "sample_weight_diagnostics",
     ):
         _assert_nested_equal(uninterrupted_state[key], resumed_state[key])
     frames = torch.stack([
@@ -319,10 +484,12 @@ def test_fixed_epoch_outer_refit_never_reads_outer_test_or_uses_validation(tmp_p
     assert result["ready_for_fit"] is True
     assert result["epoch_completed"] == 2
     assert result["best_epoch"] == 2
-    assert result["best_validation_loss"] is None
+    assert result["best_validation_auroc"] is None
     assert result["selection_policy"] == "fixed_epoch_count_no_validation"
     assert len(result["history"]) == 2
     assert all(row["validation_loss"] is None and row["validation_accuracy"] is None
+               and row["validation_roc_auc"] is None
+               and row["validation_predictions"] == []
                for row in result["history"])
     assert set(dataset.loaded_indices) == set(range(6))
     changed_outer_rows = _rows()

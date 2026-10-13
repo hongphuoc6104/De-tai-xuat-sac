@@ -27,8 +27,9 @@ from .image_classification import resize_pad_rgb
 from .io import atomic_json, file_hash, fingerprint
 from .mil_checkpoint import CheckpointIdentityError, CheckpointStore, FitLock
 
-FINETUNE_SCHEMA_VERSION = 1
-FINETUNE_PROTOCOL = "conditional-whole-frame-finetune-v1"
+FINETUNE_SCHEMA_VERSION = 2
+FINETUNE_PROTOCOL = "conditional-whole-frame-finetune-v2"
+SAMPLE_WEIGHT_POLICY = "patient_class_mass_N_element_weighted_bce_v1"
 MODES = {"F0", "F1"}
 _IMAGE_MEAN = (0.485, 0.456, 0.406)
 _IMAGE_STD = (0.229, 0.224, 0.225)
@@ -45,7 +46,7 @@ class ImageFinetuneConfig:
     max_epochs: int = 10
     fixed_epoch_count: int | None = None
     patience: int = 3
-    min_delta: float = 0.0
+    min_auroc_delta: float = 0.0
     seed: int = 17
     head_learning_rate: float = 1e-3
     layer4_learning_rate: float = 1e-5
@@ -79,13 +80,13 @@ class ImageFinetuneConfig:
             raise ValueError("The conditional F0/F1 protocol fixes early-stop patience at 3 epochs.")
         if isinstance(self.seed, bool) or not isinstance(self.seed, int):
             raise ValueError("seed must be an integer.")
-        for name in ("min_delta", "head_learning_rate", "layer4_learning_rate", "weight_decay",
+        for name in ("min_auroc_delta", "head_learning_rate", "layer4_learning_rate", "weight_decay",
                      "budget_minutes", "reserve_minutes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f"{name} must be finite.")
-        if self.min_delta < 0 or self.weight_decay < 0:
-            raise ValueError("min_delta and weight_decay must be nonnegative.")
+        if self.min_auroc_delta < 0 or self.weight_decay < 0:
+            raise ValueError("min_auroc_delta and weight_decay must be nonnegative.")
         if self.head_learning_rate <= 0 or self.layer4_learning_rate <= 0:
             raise ValueError("Learning rates must be positive.")
         if self.head_learning_rate != 1e-3 or self.layer4_learning_rate != 1e-5:
@@ -387,11 +388,12 @@ def _validation_metrics(
     config: ImageFinetuneConfig,
     device: torch.device,
     amp_enabled: bool,
-) -> tuple[float, float]:
+) -> tuple[float, float, float, list[dict[str, Any]]]:
     model.eval()
     total_loss = 0.0
     correct = 0
     count = 0
+    validation_predictions: list[dict[str, Any]] = []
     with torch.inference_mode():
         for start in range(0, len(image_ids), config.batch_size):
             batch_ids = image_ids[start:start + config.batch_size]
@@ -408,25 +410,63 @@ def _validation_metrics(
                 raise ValueError("Validation loss is not finite.")
             total_loss += float(loss.item()) * len(batch_ids)
             correct += int(((logits >= 0) == (labels >= 0.5)).sum().item())
+            probabilities = torch.sigmoid(logits).tolist()
+            batch_labels = [int(value) for value in labels.tolist()]
+            validation_predictions.extend(
+                {"image_id": image_id, "image_target": label, "probability": float(probability)}
+                for image_id, label, probability in zip(batch_ids, batch_labels, probabilities, strict=True)
+            )
             count += len(batch_ids)
-    return total_loss / count, correct / count
+    try:
+        from sklearn.metrics import roc_auc_score
+    except ImportError as exc:
+        raise RuntimeError("Inner AUROC epoch selection requires scikit-learn.") from exc
+    saved_labels = [row["image_target"] for row in validation_predictions]
+    saved_probabilities = [row["probability"] for row in validation_predictions]
+    if set(saved_labels) != {0, 1}:
+        raise ValueError("Validation patients must include both image classes for AUROC selection.")
+    validation_auroc = float(roc_auc_score(saved_labels, saved_probabilities))
+    if not math.isfinite(validation_auroc):
+        raise ValueError("Validation AUROC is not finite.")
+    return total_loss / count, correct / count, validation_auroc, validation_predictions
 
 
-def _class_weight(rows_by_id: Mapping[str, dict[str, Any]], train_ids: Sequence[str],
-                  device: torch.device) -> tuple[torch.Tensor, dict[str, int]]:
-    patient_classes: dict[str, set[int]] = defaultdict(set)
-    for image_id in train_ids:
-        row = rows_by_id[image_id]
-        patient_classes[row["patient_id"]].add(row["image_target"])
-    negative_patients = sum(0 in classes for classes in patient_classes.values())
-    positive_patients = sum(1 in classes for classes in patient_classes.values())
+def _patient_class_sample_weights(
+    rows_by_id: Mapping[str, dict[str, Any]], train_ids: Sequence[str], device: torch.device,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    labels = np.asarray([rows_by_id[image_id]["image_target"] for image_id in train_ids], dtype=np.int64)
+    patients = np.asarray([rows_by_id[image_id]["patient_id"] for image_id in train_ids], dtype=object)
+    try:
+        from .image_classification_studies import sample_weights
+    except ImportError as exc:
+        raise RuntimeError("Patient-class BCE weighting requires image-classification studies helpers.") from exc
+    weights = sample_weights(labels, patients, "patient_class")
+    negative_patients = len(set(patients[labels == 0].tolist()))
+    positive_patients = len(set(patients[labels == 1].tolist()))
     if negative_patients == 0 or positive_patients == 0:
         raise ValueError("The training patients must represent both binary image classes.")
-    pos_weight = negative_patients / positive_patients
-    return torch.tensor([pos_weight], dtype=torch.float32, device=device), {
+    patient_class_mass: dict[tuple[str, int], float] = defaultdict(float)
+    for label, patient, weight in zip(labels.tolist(), patients.tolist(), weights.tolist(), strict=True):
+        patient_class_mass[(_sha256_text(str(patient)), int(label))] += float(weight)
+    sample_weight_sha256 = hashlib.sha256(weights.astype("<f8", copy=False).tobytes()).hexdigest()
+    diagnostics = {
+        "scheme": "patient_class",
+        "normalization": "mass_N",
+        "image_count": len(train_ids),
+        "weight_sum": float(weights.sum()),
+        "weight_mean": float(weights.mean()),
         "negative_class_patients": negative_patients,
         "positive_class_patients": positive_patients,
+        "weight_sum_by_target": {
+            str(label): float(weights[labels == label].sum()) for label in (0, 1)
+        },
+        "patient_class_weight_sums": [
+            {"patient_sha256": patient_sha, "image_target": label, "weight_sum": value}
+            for (patient_sha, label), value in sorted(patient_class_mass.items())
+        ],
+        "sample_weight_sha256": sample_weight_sha256,
     }
+    return torch.tensor(weights, dtype=torch.float32, device=device), diagnostics
 
 
 def _validate_split(
@@ -454,6 +494,8 @@ def _validate_split(
     unknown = (set(train_ids) | set(validation_ids) | set(outer_test_ids)) - set(row_by_id)
     if unknown:
         raise ValueError(f"Fold split references unknown source image IDs: {sorted(unknown)[:5]}")
+    if validation_ids and {row_by_id[image_id]["image_target"] for image_id in validation_ids} != {0, 1}:
+        raise ValueError("Inner validation rows must include both image classes for AUROC selection.")
     train_patients = {row_by_id[image_id]["patient_id"] for image_id in train_ids}
     validation_patients = {row_by_id[image_id]["patient_id"] for image_id in validation_ids}
     outer_test_patients = {row_by_id[image_id]["patient_id"] for image_id in outer_test_ids}
@@ -479,6 +521,7 @@ def _identity(
     split_binding: dict[str, Any],
     device_type: str,
     initial_model_state_sha256: str,
+    sample_weight_diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
     semantic_config = asdict(config)
     for key in ("budget_minutes", "reserve_minutes", "recover_stale_lock"):
@@ -500,6 +543,7 @@ def _identity(
         "schema_version": FINETUNE_SCHEMA_VERSION,
         "protocol": FINETUNE_PROTOCOL,
         "mode": config.mode,
+        "selection_metric": "fixed_epoch_count" if config.fixed_epoch_count is not None else "validation_roc_auc",
         "device_type": device_type,
         "config": semantic_config,
         "model_schema": _model_schema(model),
@@ -510,6 +554,8 @@ def _identity(
         "source_binding": source_binding,
         "source_rows_sha256": fingerprint(row_binding),
         "split_binding": split_binding,
+        "sample_weight_policy": SAMPLE_WEIGHT_POLICY,
+        "sample_weight_sha256": sample_weight_diagnostics["sample_weight_sha256"],
     }
 
 
@@ -522,7 +568,7 @@ def _new_state(
     identity: dict[str, Any],
     train_count: int,
     seed: int,
-    class_weight_basis: dict[str, int],
+    sample_weight_diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
     _seed_all(seed)
     shuffle_generator.manual_seed(seed)
@@ -534,7 +580,10 @@ def _new_state(
         "source_binding": identity["source_binding"],
         "split_binding": identity["split_binding"],
         "config": identity["config"],
-        "class_weight_basis": class_weight_basis,
+        "selection_metric": identity["selection_metric"],
+        "sample_weight_policy": SAMPLE_WEIGHT_POLICY,
+        "sample_weight_sha256": sample_weight_diagnostics["sample_weight_sha256"],
+        "sample_weight_diagnostics": sample_weight_diagnostics,
         "model_state": model.state_dict(),
         "optimizer_state": optimizer.state_dict(),
         "scheduler_state": scheduler.state_dict(),
@@ -547,7 +596,7 @@ def _new_state(
         "epoch_sample_count": 0,
         "epoch_step_count": 0,
         "shuffle_generator_state": shuffle_generator.get_state(),
-        "best_metric": math.inf,
+        "best_metric": -math.inf,
         "best_epoch": 0,
         "patience_count": 0,
         "history": [],
@@ -566,7 +615,7 @@ def _restore_state(
     scaler: torch.amp.GradScaler,
     shuffle_generator: torch.Generator,
     train_count: int,
-    class_weight_basis: dict[str, int],
+    sample_weight_diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
     if (state.get("schema_version") != FINETUNE_SCHEMA_VERSION
             or state.get("identity_sha256") != fingerprint(identity)
@@ -574,8 +623,17 @@ def _restore_state(
             or state.get("source_binding") != identity["source_binding"]
             or state.get("split_binding") != identity["split_binding"]
             or state.get("config") != identity["config"]
-            or state.get("class_weight_basis") != class_weight_basis):
+            or state.get("selection_metric") != identity["selection_metric"]
+            or state.get("sample_weight_policy") != SAMPLE_WEIGHT_POLICY
+            or state.get("sample_weight_sha256") != sample_weight_diagnostics["sample_weight_sha256"]
+            or state.get("sample_weight_diagnostics") != sample_weight_diagnostics):
         raise CheckpointIdentityError("Fine-tune checkpoint state does not match source, split, or config identity.")
+    best_metric = state.get("best_metric")
+    if (isinstance(best_metric, bool) or not isinstance(best_metric, (int, float))
+            or (not math.isfinite(float(best_metric)) and best_metric != -math.inf)):
+        raise ValueError("Checkpoint validation AUROC is invalid.")
+    if math.isfinite(float(best_metric)) and not 0.0 <= float(best_metric) <= 1.0:
+        raise ValueError("Checkpoint validation AUROC is outside [0,1].")
     permutation = state.get("train_permutation")
     if (not isinstance(permutation, list) or len(permutation) != train_count
             or sorted(permutation) != list(range(train_count))):
@@ -603,8 +661,9 @@ def _restore_state(
 
 def _status_write(path: Path, *, state: str, fit_id: str, epoch: int, global_step: int,
                   train_cursor: int, best_metric: float, best_epoch: int,
-                  patience_count: int, checkpoint_count: int, class_weight_basis: dict[str, int],
-                  ready_for_fit: bool, selection_policy: str,
+                  patience_count: int, checkpoint_count: int,
+                  sample_weight_diagnostics: dict[str, Any], ready_for_fit: bool,
+                  selection_policy: str, selection_metric: str,
                   fixed_epoch_count: int | None,
                   stop_reason: str | None = None) -> dict[str, Any]:
     payload = {
@@ -615,12 +674,14 @@ def _status_write(path: Path, *, state: str, fit_id: str, epoch: int, global_ste
         "epoch_completed": epoch,
         "global_step": global_step,
         "train_cursor": train_cursor,
-        "best_validation_loss": None if not math.isfinite(best_metric) else best_metric,
+        "best_validation_auroc": None if not math.isfinite(best_metric) else best_metric,
+        "selection_metric": selection_metric,
         "best_epoch": best_epoch,
         "patience_count": patience_count,
         "checkpoint_count": checkpoint_count,
-        "class_weight_basis": class_weight_basis,
-        "class_weight_policy": "BCE pos_weight from train-only patient-class counts; no balanced sampler",
+        "sample_weight_diagnostics": sample_weight_diagnostics,
+        "sample_weight_policy": SAMPLE_WEIGHT_POLICY,
+        "loss_policy": "unreduced BCE element losses multiplied by train-only patient_class weights; optimizer-window mean; no sampler or pos_weight",
         "optimizer_boundary_only_checkpoints": True,
         "ready_for_fit": ready_for_fit,
         "selection_policy": selection_policy,
@@ -698,15 +759,20 @@ def train_one_image_fold(
     model.to(resolved_device)
     initial_model_state_sha256 = _model_state_sha256(model)
     trainable_names, batch_norm_names = _configure_trainability(model, config.mode)
+    train_sample_weights, sample_weight_diagnostics = _patient_class_sample_weights(
+        row_by_id, train_ids, resolved_device,
+    )
     identity = _identity(
         model, config, normalized_rows, source_binding_json, split_binding,
         resolved_device.type, initial_model_state_sha256,
+        sample_weight_diagnostics,
     )
     epoch_limit = config.fixed_epoch_count or config.max_epochs
+    selection_metric = identity["selection_metric"]
     selection_policy = (
         "fixed_epoch_count_no_validation"
         if config.fixed_epoch_count is not None
-        else "validation_loss_with_patience"
+        else "inner_validation_auroc_with_patience"
     )
     fit_id = fingerprint(identity)
     fit_root = Path(output_root).expanduser()
@@ -715,13 +781,12 @@ def train_one_image_fold(
     store = CheckpointStore(checkpoint_root, identity)
     optimizer = _optimizer(model, config.mode, config)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=1, min_lr=1e-7,
+        optimizer, mode="max", factor=0.5, patience=1, min_lr=1e-7,
     )
     amp_enabled = config.amp and resolved_device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
     shuffle_generator = torch.Generator(device="cpu")
-    pos_weight, class_weight_basis = _class_weight(row_by_id, train_ids, resolved_device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction="sum")
+    criterion = nn.BCEWithLogitsLoss(reduction="none")
     deadline = time.monotonic() + (config.budget_minutes - config.reserve_minutes) * 60.0
     invocation_steps = 0
     finite_gradient_checks = 0
@@ -732,7 +797,7 @@ def train_one_image_fold(
         if loaded is None:
             state = _new_state(
                 model, optimizer, scheduler, scaler, shuffle_generator, identity,
-                len(train_ids), config.seed, class_weight_basis,
+                len(train_ids), config.seed, sample_weight_diagnostics,
             )
             receipt = store.publish(state, epoch=0, is_best=False)
             _restore_rng(state["rng"], shuffle_generator)
@@ -740,7 +805,7 @@ def train_one_image_fold(
         else:
             state = _restore_state(
                 loaded, identity, model, optimizer, scheduler, scaler,
-                shuffle_generator, len(train_ids), class_weight_basis,
+                shuffle_generator, len(train_ids), sample_weight_diagnostics,
             )
             pointer = json.loads((checkpoint_root / "latest.json").read_text(encoding="utf-8"))
             last_checkpoint_sha256 = pointer["sha256"]
@@ -758,8 +823,9 @@ def train_one_image_fold(
                 epoch=state["epoch"], global_step=state["global_step"],
                 train_cursor=state["train_cursor"], best_metric=state["best_metric"],
                 best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-                checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+                checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
                 ready_for_fit=True, selection_policy=selection_policy,
+                selection_metric=selection_metric,
                 fixed_epoch_count=config.fixed_epoch_count,
             )
             return _result_payload(fit_root, checkpoint_root, result_status, state,
@@ -771,8 +837,9 @@ def train_one_image_fold(
             epoch=state["epoch"], global_step=state["global_step"],
             train_cursor=state["train_cursor"], best_metric=state["best_metric"],
             best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-            checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+            checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
             ready_for_fit=False, selection_policy=selection_policy,
+            selection_metric=selection_metric,
             fixed_epoch_count=config.fixed_epoch_count,
         )
 
@@ -791,18 +858,19 @@ def train_one_image_fold(
 
         def finish_epoch() -> dict[str, Any] | None:
             if config.fixed_epoch_count is None:
-                validation_loss, validation_accuracy = _validation_metrics(
+                validation_loss, validation_accuracy, validation_auroc, validation_predictions = _validation_metrics(
                     model, source_dataset, normalized_rows, dataset_positions, validation_ids,
                     config=config, device=resolved_device, amp_enabled=amp_enabled,
                 )
-                scheduler.step(validation_loss)
-                improved = validation_loss < state["best_metric"] - config.min_delta
+                scheduler.step(validation_auroc)
+                improved = validation_auroc > state["best_metric"] + config.min_auroc_delta
             else:
-                validation_loss, validation_accuracy = None, None
+                validation_loss, validation_accuracy, validation_auroc = None, None, None
+                validation_predictions = []
                 improved = True
             if improved:
-                if validation_loss is not None:
-                    state["best_metric"] = validation_loss
+                if validation_auroc is not None:
+                    state["best_metric"] = validation_auroc
                 state["best_epoch"] = state["epoch"] + 1
                 state["patience_count"] = 0
             elif config.fixed_epoch_count is None:
@@ -812,6 +880,8 @@ def train_one_image_fold(
                 "train_loss": state["epoch_loss_sum"] / max(1, state["epoch_sample_count"]),
                 "validation_loss": validation_loss,
                 "validation_accuracy": validation_accuracy,
+                "validation_roc_auc": validation_auroc,
+                "validation_predictions": validation_predictions,
                 "learning_rates": [float(group["lr"]) for group in optimizer.param_groups],
             })
             state["epoch"] += 1
@@ -836,8 +906,9 @@ def train_one_image_fold(
                 epoch=state["epoch"], global_step=state["global_step"],
                 train_cursor=state["train_cursor"], best_metric=state["best_metric"],
                 best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-                checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+                checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
                 ready_for_fit=state["finished"], selection_policy=selection_policy,
+                selection_metric=selection_metric,
                 fixed_epoch_count=config.fixed_epoch_count,
             )
             if notify is not None:
@@ -872,8 +943,9 @@ def train_one_image_fold(
                     epoch=state["epoch"], global_step=state["global_step"],
                     train_cursor=state["train_cursor"], best_metric=state["best_metric"],
                     best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-                    checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+                    checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
                     ready_for_fit=False, selection_policy=selection_policy,
+                    selection_metric=selection_metric,
                     fixed_epoch_count=config.fixed_epoch_count, stop_reason=stop_reason,
                 )
                 return _result_payload(fit_root, checkpoint_root, json.loads(status_path.read_text()),
@@ -902,11 +974,13 @@ def train_one_image_fold(
                 autocast = torch.autocast("cuda", dtype=torch.float16) if amp_enabled else nullcontext()
                 with autocast:
                     logits = _validate_logits(model(frames), len(image_ids))
-                    batch_loss_sum = criterion(logits, labels)
-                    loss = batch_loss_sum / len(selected_positions)
+                    element_losses = criterion(logits, labels)
+                    batch_weights = train_sample_weights[batch_positions]
+                    weighted_loss_sum = (element_losses * batch_weights).sum()
+                    loss = weighted_loss_sum / len(selected_positions)
                 if not torch.isfinite(loss):
                     raise ValueError("Training loss is not finite.")
-                step_loss_sum += float(batch_loss_sum.detach().item())
+                step_loss_sum += float(weighted_loss_sum.detach().item())
                 scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             checked = [parameter.grad for parameter in model.parameters()
@@ -941,8 +1015,9 @@ def train_one_image_fold(
                     epoch=state["epoch"], global_step=state["global_step"],
                     train_cursor=state["train_cursor"], best_metric=state["best_metric"],
                     best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-                    checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+                    checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
                     ready_for_fit=False, selection_policy=selection_policy,
+                    selection_metric=selection_metric,
                     fixed_epoch_count=config.fixed_epoch_count,
                 )
                 if notify is not None:
@@ -955,8 +1030,9 @@ def train_one_image_fold(
                     epoch=state["epoch"], global_step=state["global_step"],
                     train_cursor=state["train_cursor"], best_metric=state["best_metric"],
                     best_epoch=state["best_epoch"], patience_count=state["patience_count"],
-                    checkpoint_count=checkpoint_count, class_weight_basis=class_weight_basis,
+                    checkpoint_count=checkpoint_count, sample_weight_diagnostics=sample_weight_diagnostics,
                     ready_for_fit=False, selection_policy=selection_policy,
+                    selection_metric=selection_metric,
                     fixed_epoch_count=config.fixed_epoch_count, stop_reason=stop_reason,
                 )
                 if notify is not None:
@@ -987,7 +1063,7 @@ def _result_payload(fit_root: Path, checkpoint_root: Path, status: dict[str, Any
         "global_step": int(state["global_step"]),
         "epoch_completed": int(state["epoch"]),
         "best_epoch": int(state["best_epoch"]),
-        "best_validation_loss": None if not math.isfinite(state["best_metric"]) else float(state["best_metric"]),
+        "best_validation_auroc": None if not math.isfinite(state["best_metric"]) else float(state["best_metric"]),
         "finite_gradient_checks": finite_gradient_checks,
         "latest_checkpoint_sha256": checkpoint_sha256,
         "trainable_parameter_names": trainable_names,
