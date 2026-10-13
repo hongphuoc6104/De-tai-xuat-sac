@@ -1,0 +1,80 @@
+{
+  "branch": "codex/image-finetune-checkpoint",
+  "commit": "16a0eb495a86e9a00cb50e38f1f40219348be879",
+  "epoch_selection": {
+    "auroc_best_epoch": 1,
+    "best_checkpoint_auroc": 1.0,
+    "best_checkpoint_epoch": 1,
+    "loss_best_epoch": 2,
+    "policy": "inner_validation_auroc_with_patience",
+    "saved_probability_label_auroc_by_epoch": [
+      1.0,
+      0.75,
+      0.5
+    ],
+    "selected_best_epoch": 1,
+    "validation_auroc_by_epoch": [
+      1.0,
+      0.75,
+      0.5
+    ],
+    "validation_loss_by_epoch": [
+      0.6734407097101212,
+      0.45864560292102396,
+      0.6931471824645996
+    ]
+  },
+  "patient_class_weights": {
+    "bce_pos_weight": null,
+    "bce_reduction": "none",
+    "diagnostic_patient_class_mass": [
+      {
+        "image_target": 1,
+        "patient_sha256": "87fbe1decfae01142eec4350c732851fcb291df24211ee0bdcbbaf800a786885",
+        "weight_sum": 1.5
+      },
+      {
+        "image_target": 1,
+        "patient_sha256": "982edd7e553ed70a5ab3b953819262a0ff7bb5d60448a5966cbcc709f0f468a4",
+        "weight_sum": 1.5
+      },
+      {
+        "image_target": 0,
+        "patient_sha256": "ef7c47b8b531ae2658e9f559050b20ec65a5bf6512d3b3237d4b10598ed73f53",
+        "weight_sum": 1.5
+      },
+      {
+        "image_target": 0,
+        "patient_sha256": "f0fb2a984f479cd66b5f0741ca48099d7eba37776ad7280f3018e51b984627e3",
+        "weight_sum": 1.5
+      }
+    ],
+    "effective_loss_formula": "unreduced BCE element losses multiplied by train-only patient_class weights; optimizer-window mean; no sampler or pos_weight",
+    "image_weights": {
+      "proof-image-0": 0.75,
+      "proof-image-1": 0.75,
+      "proof-image-2": 1.5,
+      "proof-image-3": 0.75,
+      "proof-image-4": 0.75,
+      "proof-image-5": 1.5
+    },
+    "mean_weight": 1.0,
+    "normalization": "mass_N",
+    "patient_optimizer_step_exposures": {
+      "negative-multi": 6,
+      "negative-single": 3,
+      "positive-multi": 6,
+      "positive-single": 3
+    },
+    "scheme": "patient_class",
+    "weight_gradient_calls": 18,
+    "weight_sum": 6.0,
+    "weighted_loss_contributions": {
+      "negative-multi": 4.365521460771561,
+      "negative-single": 4.025648385286331,
+      "positive-multi": 2.61193884909153,
+      "positive-single": 2.865880787372589
+    }
+  },
+  "phase": "after_fix"
+}
