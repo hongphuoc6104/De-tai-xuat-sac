@@ -55,3 +55,12 @@
 - **Giả định sai lầm (Wrong Assumptions):** Thêm pipeline độc lập không ảnh hưởng identity của code archive dùng glob toàn repository.
 - **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Scope MIL archive loại namespace/dependency riêng image_classification; actual pin cũ được phục hồi. MIL notebook và image runtime packaging suite qua 10/10.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Runtime từng domain có phạm vi nguồn rõ ràng; extension pipeline khác không đổi cache/notebook pin ngoài ý muốn.
+
+
+### [ERR-20261014-01] Reporter required a scaler hash absent from the producer schema
+- **Triệu chứng (Symptom):** Real 2,802-image study completed, but analyzer stopped: “Fold 1 scaler scale hash does not match its serialized audit vector.”
+- **Tái hiện E2E (Reproduction Path):** Exact Colab analyzer invocation persisted `Results/image_classification/execution_bop_20261014/report_e2e_reproduction.json`; returncode 2. Synthetic actual-producer reproduction: `tests/test_image_study_report.py::test_analyzer_cli_accepts_an_actual_v1_producer_study`.
+- **Nguyên nhân cốt lõi (Root Cause):** Version-1 trainer stores `scaler_scale` in committed study audits without a separate `scaler_scale_sha256`; the old report-only fixture invented that field and hid producer/consumer drift.
+- **Giả định sai lầm (Wrong Assumptions):** A hand-built report fixture represents the real trainer's persisted schema. Adding missing hashes to an existing study would be safe; it would instead mutate committed evidence.
+- **Giải pháp & Kiểm chứng (Resolution & Proof):** Reporter requires and verifies the producer study commit binding study/OOF file bytes; validates dimensions, finite positive scales and optional per-array hashes when present. Existing study/model/cache remain immutable. Actual producer→private export→report CLI E2E and tamper/nonpositive-scale regressions verify the boundary.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Test reporting against real producer output. Do not invent audit fields or rewrite committed studies to satisfy a consumer; bind serialization through its declared commit contract.
