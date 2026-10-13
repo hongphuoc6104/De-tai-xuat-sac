@@ -152,3 +152,7 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261014-02..05] Fixed-patient head studies: JSON replay, budget owner, per-head threshold/routing; xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
 - [ERR-20261014-06] Cached lab archive preflight, atomic source review and complete evidence graph: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-07] New frozen release vs fixed baseline source binding: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-08] Shared source-bundle/notebook pin synchronization after module integration: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

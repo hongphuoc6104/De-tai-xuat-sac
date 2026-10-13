@@ -82,3 +82,20 @@
 - **Giả định sai lầm (Wrong Assumptions):** A successful head fit implies its review source is ready; mkdir(exist_ok=True) creates a fresh private directory; comparison hashes prove all source review evidence is durable.
 - **Giải pháp & Kiểm chứng (Resolution & Proof):** All-or-none archive arguments and full source hash bindings before training; same-process signatures avoid rehashing unchanged archives; staged review with atomic rename and minimized identifier references; lab commit includes diagnostics, every review file and all sub-study commit hashes. Budget checks cover bounded reads and use the lab's absolute deadline. E2E plus tamper/budget-resume regressions pass before clinical data execution.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Preflight prerequisites before fits and define completeness over the entire artifact graph. Never follow preexisting private symlinks; keep source review atomic and distinct from training labels.
+# [ERR-20261014-07] Comparing new frozen releases using an old bound baseline
+
+- Symptom: the existing loader rejects a geometry-changed feature release despite identical original sources.
+- Reproduction Path: `scripts/reproduce_cross_release_comparison.py`; before proof `Results/proofs/image_cross_release_e2e_before_20261014.log` uses real producer flow with synthetic original TIFFs48→64.
+- Root Cause: baseline/source release identity is deliberately bound; geometry or encoder changes create another feature identity.
+- Wrong Assumptions: identical image counts alone justify reusing an unrelated baseline fold model; relaxing the old release check would be safe.
+- Resolution & Proof: explicit `load_comparison_data` verifies both releases and every source lineage field, replays fixed patient assignments, and fingerprints that binding in new study identity; producer→study→resume E2E and source/label/coverage rejection tests pass. Old strict loader remains unchanged.
+- Golden Prevention Rule: preserve existing release guards; compare new frozen representations only through verified source-cohort/assignment bindings.
+
+# [ERR-20261014-08] Notebook source-bundle pin drift after module integration
+
+- Symptom: full tests fail because the reference MIL notebook pin differs from the deterministic package of current source modules.
+- Reproduction Path: `tests/test_mil_notebook.py::test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements`; full producer/notebook E2E failure is recorded in `Results/proofs/test_evidence_20261014_050054.log`.
+- Root Cause: shared code-only bundles include the package's modules; adding modules changes the bundle SHA while a checked-in notebook still has the prior source pin.
+- Wrong Assumptions: a new image module cannot affect a shared source-bundle receipt.
+- Resolution & Proof: rebuild the deterministic package and synchronize the notebook's generated pin; targeted27 tests and full448 passed/1optional skipped in `Results/proofs/test_evidence_20261014_050607.log`. The new bundle is not uploaded over old deployed bundles or model/data releases.
+- Golden Prevention Rule: keep source/notebook pins coherent per revision and preserve deployed release identities; never weaken integrity assertions to bypass a changed bundle.

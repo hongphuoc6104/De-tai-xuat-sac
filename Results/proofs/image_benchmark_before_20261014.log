@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /data/đề tài xuất sắc/.worktrees/image-classification
+configfile: pyproject.toml
+collected 5 items
+
+tests/test_image_classification_improvement.py ....F                     [100%]
+
+=================================== FAILURES ===================================
+________ test_benchmark_producer_wholeframes_checks_source_and_commits _________
+tests/test_image_classification_improvement.py:81: in test_benchmark_producer_wholeframes_checks_source_and_commits
+    result = improvement.benchmark_whole_frames(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'histology_data.image_classification_improvement' has no attribute 'benchmark_whole_frames'
+=========================== short test summary info ============================
+FAILED tests/test_image_classification_improvement.py::test_benchmark_producer_wholeframes_checks_source_and_commits
+========================= 1 failed, 4 passed in 3.18s ==========================

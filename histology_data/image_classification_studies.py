@@ -70,6 +70,7 @@ class StudyData:
     baseline: dict[str, Any]
     outer: list[tuple[np.ndarray, np.ndarray]]
     assignment_sha256: str
+    source_comparison: dict[str, Any] | None = None
 
 
 def load_study_data(run_root: Path, baseline_root: Path) -> StudyData:
@@ -273,7 +274,7 @@ def _descriptor(data: StudyData, config: StudyConfig) -> dict[str, Any]:
     for key in ("budget_minutes", "reserve_minutes", "recover_lock"):
         statistical.pop(key)
     statistical = json.loads(json.dumps(statistical))
-    return {"protocol": PROTOCOL, "release_id": data.release["release_id"],
+    descriptor = {"protocol": PROTOCOL, "release_id": data.release["release_id"],
             "baseline_study_id": data.baseline["study_id"],
             "assignment_sha256": data.assignment_sha256, "config": statistical,
             "weight_scale": "mass equals subset image count",
@@ -283,6 +284,9 @@ def _descriptor(data: StudyData, config: StudyConfig) -> dict[str, Any]:
             "versions": {"numpy": np.__version__, "scipy": scipy.__version__, "sklearn": sklearn.__version__},
             "implementation_sha256": file_hash(Path(__file__)),
             "core_sha256": file_hash(Path(core.__file__))}
+    if data.source_comparison is not None:
+        descriptor["source_comparison"] = data.source_comparison
+    return descriptor
 
 
 def _verified_fold(data: StudyData, root: Path, study_id: str, fold: int,
