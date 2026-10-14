@@ -567,12 +567,13 @@ def create_execution_attempt(
 def classify_retccl_failure(error: Exception) -> RetCCLFailureKind:
     """Classify only remote transport and explicit checkpoint-schema failures as optional.
 
-    Local OSError, a local checkpoint SHA mismatch, assertions, CUDA OOM, and
-    implementation errors remain fatal so an optional B1 run cannot hide a
-    broken or untrusted local artifact.
+    Network timeouts raised by ``urlopen``/``response.read`` must be wrapped
+    as ``URLError`` at that transport boundary.  Bare ``TimeoutError`` or
+    ``ConnectionError`` may come from local Drive/file operations and remain
+    fatal, as do local checkpoint SHA mismatches, assertions, CUDA OOM, and
+    implementation errors.
     """
-    if isinstance(error, (urllib.error.URLError, http.client.HTTPException,
-                          TimeoutError, ConnectionError)):
+    if isinstance(error, (urllib.error.URLError, http.client.HTTPException)):
         return RetCCLFailureKind.REMOTE_UNAVAILABLE
     if isinstance(error, RuntimeError) and str(error) == _RETCCL_REMOTE_NOT_READY:
         return RetCCLFailureKind.REMOTE_UNAVAILABLE

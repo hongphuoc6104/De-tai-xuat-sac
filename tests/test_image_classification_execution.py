@@ -351,6 +351,85 @@ def test_retccl_policy_uses_real_download_and_encoder_errors(tmp_path: Path, mon
     assert execution.classify_retccl_failure(probe_error.value) is execution.RetCCLFailureKind.REMOTE_UNAVAILABLE
     assert not (tmp_path / "unavailable").exists()
 
+    class WrappedRemoteReadTimeout:
+        status = 200
+
+        def __enter__(self) -> "WrappedRemoteReadTimeout":
+            return self
+
+        def __exit__(self, *_args: Any) -> bool:
+            return False
+
+        def read(self, _size: int) -> bytes:
+            raise urllib.error.URLError(TimeoutError("remote response read timed out"))
+
+    monkeypatch.setattr(
+        pathology_encoder,
+        "probe_official_weights",
+        lambda **_kwargs: {"download_ready": True},
+    )
+    monkeypatch.setattr(
+        pathology_encoder.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: WrappedRemoteReadTimeout(),
+    )
+    with pytest.raises(urllib.error.URLError) as read_error:
+        pathology_encoder.download_official_weights(
+            tmp_path / "read-timeout" / "best_ckpt.pth", expected_sha256="a" * 64
+        )
+    assert execution.classify_retccl_failure(read_error.value) is execution.RetCCLFailureKind.REMOTE_UNAVAILABLE
+    assert list((tmp_path / "read-timeout").iterdir()) == []
+
+    class SmallResponse:
+        status = 200
+
+        def __init__(self) -> None:
+            self.read_once = False
+
+        def __enter__(self) -> "SmallResponse":
+            return self
+
+        def __exit__(self, *_args: Any) -> bool:
+            return False
+
+        def read(self, _size: int) -> bytes:
+            if self.read_once:
+                return b""
+            self.read_once = True
+            return b"small fixture payload"
+
+    real_fdopen = pathology_encoder.os.fdopen
+
+    class LocalWriteTimeout:
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def __enter__(self) -> "LocalWriteTimeout":
+            return self
+
+        def __exit__(self, *args: Any) -> bool:
+            return bool(self.stream.__exit__(*args))
+
+        def write(self, _payload: bytes) -> int:
+            raise TimeoutError("local Drive destination write timed out")
+
+    monkeypatch.setattr(
+        pathology_encoder.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: SmallResponse(),
+    )
+    monkeypatch.setattr(
+        pathology_encoder.os,
+        "fdopen",
+        lambda descriptor, mode: LocalWriteTimeout(real_fdopen(descriptor, mode)),
+    )
+    with pytest.raises(TimeoutError, match="local Drive destination write") as local_write_error:
+        pathology_encoder.download_official_weights(
+            tmp_path / "local-timeout" / "best_ckpt.pth", expected_sha256="a" * 64
+        )
+    assert execution.classify_retccl_failure(local_write_error.value) is execution.RetCCLFailureKind.FATAL
+    assert list((tmp_path / "local-timeout").iterdir()) == []
+
     class TorchSchemaStub:
         @staticmethod
         def is_tensor(_value: Any) -> bool:
@@ -366,5 +445,7 @@ def test_retccl_policy_uses_real_download_and_encoder_errors(tmp_path: Path, mon
         pathology_encoder.RetCCLResNet50Encoder(checkpoint, expected_sha256="0" * 64)
     assert execution.classify_retccl_failure(sha_error.value) is execution.RetCCLFailureKind.FATAL
     assert execution.classify_retccl_failure(OSError("Drive I/O error")) is execution.RetCCLFailureKind.FATAL
+    assert execution.classify_retccl_failure(TimeoutError("local file operation timed out")) is execution.RetCCLFailureKind.FATAL
+    assert execution.classify_retccl_failure(ConnectionError("local filesystem connection failed")) is execution.RetCCLFailureKind.FATAL
     assert execution.classify_retccl_failure(AssertionError("failed invariant")) is execution.RetCCLFailureKind.FATAL
     assert execution.classify_retccl_failure(RuntimeError("CUDA out of memory")) is execution.RetCCLFailureKind.FATAL
