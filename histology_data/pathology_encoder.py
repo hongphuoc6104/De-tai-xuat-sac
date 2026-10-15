@@ -1,14 +1,16 @@
 """Verified RetCCL ResNet-50 features for full-canvas histology images.
 
-The public RetCCL checkpoint is fetched only after a caller supplies its full
-SHA-256 pin.  Torch and torchvision stay optional until the encoder is created;
-checkpoint inspection and readiness checks do not import either framework.
+An explicitly requested first acquisition can record a TOFU SHA-256 receipt
+for the author's public checkpoint. Encoder construction still requires a
+caller-supplied full digest pin. Torch and torchvision stay optional until the
+encoder is created; inspection does not import either framework.
 """
 
 from __future__ import annotations
 
 import gc
 import hashlib
+import importlib
 import json
 import logging
 import math
@@ -17,6 +19,7 @@ import re
 import tempfile
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -247,6 +250,212 @@ def download_official_weights(
         temp_path.unlink(missing_ok=True)
     _LOGGER.info("Downloaded and SHA-256 verified official RetCCL weights to %s", target)
     return target
+
+
+def _is_gdown_remote_error(exc: Exception, *, gdown: Any, requests: Any) -> bool:
+    """Identify only gdown's remote failures, leaving local I/O exceptions raw."""
+    if isinstance(
+        exc,
+        (
+            gdown.FileURLRetrievalError,
+            requests.exceptions.RequestException,
+        ),
+    ):
+        return True
+    return isinstance(exc, gdown.DownloadError) and str(exc).startswith(
+        "Download is incomplete:"
+    )
+
+
+def _cleanup_gdown_staging(stage: Path) -> None:
+    """Remove only staging outputs owned by this acquisition attempt."""
+    if stage.exists() or stage.is_symlink():
+        stage.unlink()
+    for partial in stage.parent.glob(f"{stage.name}*.part"):
+        partial.unlink(missing_ok=True)
+
+
+def _acquire_official_weights_with_gdown(
+    destination: Path,
+    *,
+    expected_sha256: str | None,
+    expected_size_bytes: int,
+) -> dict[str, Any]:
+    """Acquire the public Drive file; ``expected_size_bytes`` is testable.
+
+    The destination must be on local storage that supports same-directory hard
+    links. Google Drive FUSE is not a supported destination: callers should
+    acquire and verify under local scratch, then manage any Drive copy separately.
+    """
+    if (
+        isinstance(expected_size_bytes, bool)
+        or not isinstance(expected_size_bytes, int)
+        or expected_size_bytes <= 0
+    ):
+        raise ValueError("expected_size_bytes must be a positive integer.")
+    expected = _expected_sha256(expected_sha256) if expected_sha256 is not None else None
+    target = Path(destination)
+    if target.is_symlink():
+        raise ValueError(f"Refusing to write checkpoint through a symlink: {target}")
+
+    def make_receipt(sha256: str, *, acquisition: str) -> dict[str, Any]:
+        return {
+            "source_url": OFFICIAL_WEIGHTS_URL,
+            "source_folder_url": RETCCL_CHECKPOINT_FOLDER_URL,
+            "source_repository_url": RETCCL_REPOSITORY_URL,
+            "source_revision": RETCCL_SOURCE_REVISION,
+            "source_file_id": OFFICIAL_WEIGHTS_FILE_ID,
+            "filename": OFFICIAL_WEIGHTS_FILENAME,
+            "size_bytes": expected_size_bytes,
+            "sha256": sha256,
+            "sha256_author_published": False,
+            "sha256_verification": (
+                "caller_supplied_pin" if expected is not None else "first_acquisition_tofu"
+            ),
+            "acquisition": acquisition,
+            "transport": (
+                {"name": "gdown", "version": "6.2.0"}
+                if acquisition == "official_public_drive_gdown"
+                else None
+            ),
+            "cookies_used": False if acquisition == "official_public_drive_gdown" else None,
+            "resume_enabled": True if acquisition == "official_public_drive_gdown" else None,
+            "receipt_created_at_utc": datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z"),
+            "path": str(target),
+        }
+
+    if target.exists():
+        if not target.is_file():
+            raise ValueError(f"Existing RetCCL checkpoint is not a regular file: {target}")
+        if expected is None:
+            raise ValueError(
+                "An existing RetCCL checkpoint requires its caller-supplied SHA-256 pin; "
+                "refusing to adopt or replace it."
+            )
+        if target.stat().st_size != expected_size_bytes:
+            raise ValueError(
+                "An existing RetCCL checkpoint failed its pinned size; refusing to replace it."
+            )
+        observed = sha256_file(target)
+        if observed != expected:
+            raise ValueError(
+                "An existing RetCCL checkpoint failed its caller-supplied SHA-256 pin; "
+                "refusing to replace it."
+            )
+        return make_receipt(observed, acquisition="existing_pinned_file")
+
+    try:
+        import gdown
+        import requests
+    except ImportError as exc:
+        raise RuntimeError(
+            "Public RetCCL acquisition requires the pinned optional dependency gdown==6.2.0."
+        ) from exc
+    if getattr(gdown, "__version__", None) != "6.2.0":
+        raise RuntimeError("Public RetCCL acquisition requires gdown==6.2.0.")
+
+    stage = target.with_name(f".{target.name}.retccl-gdown")
+    gdown_download = importlib.import_module("gdown.download")
+
+    def invoke_gdown(**kwargs: Any) -> Any:
+        try:
+            return gdown_download.download(**kwargs)
+        except Exception as exc:
+            if _is_gdown_remote_error(exc, gdown=gdown, requests=requests):
+                raise urllib.error.URLError(
+                    f"Official RetCCL Google Drive request failed: {exc}"
+                ) from exc
+            raise
+
+    download_started = False
+    try:
+        resolved = invoke_gdown(
+            id=OFFICIAL_WEIGHTS_FILE_ID,
+            quiet=True,
+            use_cookies=False,
+            skip_download=True,
+        )
+        if getattr(resolved, "id", None) != OFFICIAL_WEIGHTS_FILE_ID:
+            raise ValueError("gdown resolved a different Google Drive file ID.")
+        if getattr(resolved, "path", None) != OFFICIAL_WEIGHTS_FILENAME:
+            raise ValueError(
+                "The public RetCCL Drive file resolved to an unexpected filename; refusing it."
+            )
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if stage.is_symlink():
+            raise ValueError(f"Refusing to use a symlink as RetCCL staging output: {stage}")
+        if stage.exists():
+            raise ValueError(
+                f"A completed RetCCL staging output already exists; inspect it before retrying: {stage}"
+            )
+        partials = sorted(target.parent.glob(f"{stage.name}*.part"))
+        for partial in partials:
+            if partial.is_symlink() or not partial.is_file():
+                raise ValueError(f"Refusing unsafe RetCCL partial download: {partial}")
+            if partial.stat().st_size >= expected_size_bytes:
+                raise ValueError(f"RetCCL partial download is not resumable: {partial}")
+        if len(partials) > 1:
+            raise ValueError("Multiple RetCCL partial downloads exist; inspect them before retrying.")
+
+        download_started = True
+        result = invoke_gdown(
+            id=OFFICIAL_WEIGHTS_FILE_ID,
+            output=str(stage),
+            quiet=True,
+            use_cookies=False,
+            resume=True,
+        )
+        if Path(str(result)) != stage:
+            raise ValueError("gdown wrote the RetCCL checkpoint to an unexpected staging path.")
+        if stage.is_symlink() or not stage.is_file():
+            raise ValueError("gdown did not produce a regular RetCCL checkpoint staging file.")
+        if stage.stat().st_size != expected_size_bytes:
+            raise ValueError(
+                "Downloaded RetCCL checkpoint size differs from the author's verified file size."
+            )
+        observed = sha256_file(stage)
+        if expected is not None and observed != expected:
+            raise ValueError("Downloaded RetCCL checkpoint failed its caller-supplied SHA-256 pin.")
+
+        with stage.open("rb") as stream:
+            os.fsync(stream.fileno())
+        # Hard-link promotion is atomic and fails if another writer created target;
+        # unlike os.replace(), it cannot overwrite an unverified existing file.
+        os.link(stage, target, follow_symlinks=False)
+        stage.unlink()
+        return make_receipt(observed, acquisition="official_public_drive_gdown")
+    except urllib.error.URLError:
+        # gdown leaves its .part file in place on remote interruptions; its next
+        # resume=True call can continue that exact public download.
+        raise
+    except Exception:
+        if download_started:
+            _cleanup_gdown_staging(stage)
+        raise
+
+
+def acquire_official_weights_via_gdown(
+    destination: Path,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Acquire the author-hosted checkpoint via gdown and return its source receipt.
+
+    The first acquisition may use TOFU because the author publishes no digest;
+    callers must persist the returned full SHA-256 receipt and pass that digest
+    on every later use. Existing files always require a caller-supplied pin and
+    are never replaced. The gdown transport is pinned and runs without cookies.
+    The destination must be local same-directory hard-link capable storage;
+    promote to a Drive mount only through a separate verified copy operation.
+    """
+    return _acquire_official_weights_with_gdown(
+        destination,
+        expected_sha256=expected_sha256,
+        expected_size_bytes=OFFICIAL_WEIGHTS_SIZE_BYTES,
+    )
 
 
 def _load_ml_dependencies() -> tuple[Any, Any, Any]:

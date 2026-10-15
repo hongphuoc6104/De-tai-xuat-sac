@@ -166,3 +166,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261014-08] Shared source-bundle/notebook pin synchronization after module integration: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
 - [ERR-20261014-09] Resume chỉ-đọc cho N0/cache hoàn tất, thư mục attempt riêng và phân loại lỗi RetCCL: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261015-01] Public RetCCL Drive confirmation, no-cookie gdown resume và TOFU SHA receipt: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
