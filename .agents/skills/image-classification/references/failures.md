@@ -131,3 +131,43 @@
 - **Giả định sai lầm (Wrong Assumptions):** Equality giữa chuỗi và số là so sánh ngữ nghĩa; khác biệt cực nhỏ trong float chứng minh mô hình hoặc dữ liệu sai.
 - **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Dùng cùng typed parser cho cả hai CSV, đo toàn bộ chênh lệch trước đặt kết luận và xác minh cấu hình/folds/quyết định chính xác. Cả2.802ảnh có identity và quyết định trùng; cấu hìnhLR và assignments củaA0/A1/B1 khớp; các chênh float được báo rõ dưới1e-8, không gọi là bit-identical. Không sửa dữ liệu, mô hình hoặc train lại đối chứng.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Chuẩn hóa schema tại biên CSV; phân biệt equality của identity/decision với độ gần của float, công bố sai khác và không giảm ngưỡng mù quáng để làm assertion qua.
+
+## [ERR-20261016-01] Noncanonical JSON identities rejected resume and duplicated fits
+- **Triệu chứng (Symptom):** Prototype completed synthetic ablations, but reopening the complete report rejected its binding; L2 control also repeated cached R2 units.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** `tests/test_image_classification_r0_r3.py::test_fit_partial_resume_then_complete_and_tamper` ran actual image/cache/v1 producers followed by v2. Before repair, complete reuse raised “Artifact commit binding is invalid”; candidate logs showed duplicate R2 fits.
+- **Nguyên nhân cốt lõi (Root Cause):** In-memory tuples became JSON lists; candidate IDs distinguished numeric 0 from 0.0 even though both specified L2.
+- **Giả định sai lầm (Wrong Assumptions):** Python structural equality and JSON identity were interchangeable; numerically equivalent parameter types always fingerprint equally.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Normalize scientific settings to JSON-native types and candidate lambda/ratio to floats before hashing. E2E verifies partial→resume→complete→read-only reuse, exactly72 tiny unique fits with deployment,71 after a one-fit checkpoint, unchanged earlier commit hashes and immutable B1 commit; corrupted report/model bytes fail closed.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Canonicalize at the identity boundary before publishing any checkpoint; assert fit counts as well as output equality.
+
+## [ERR-20261016-02] Worker used the caller's __main__ module name
+- **Triệu chứng (Symptom):** A real python-m dispatcher failed before the first fit while the imported-Python path worked.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** `Results/image_classification/r0_r3_20261016/execution/CLI_before.log`; actual CLI on synthetic producer artifacts returned1 and worker reported `__main__.__spec__ is None`. Regression: `test_production_cli_dispatcher_budget_boundary`.
+- **Nguyên nhân cốt lõi (Root Cause):** Child invocation derived its import target from context-dependent `__name__`.
+- **Giả định sai lầm (Wrong Assumptions):** A module has its package-qualified name when entered through python-m.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Use a fixed package-qualified worker entry point. Actual CLI commits one tiny fit, returns a resumable partial via code2, and reaps its child.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Test the installed/CLI entry path separately from direct imports; executable module identity must be explicit.
+
+## [ERR-20261016-03] A source validator called a timestamp-writing audit producer
+- **Triệu chứng (Symptom):** Reading the completed source changed content_duplicate_audit.json even though all feature/model bytes stayed equal.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** `test_reader_does_not_write_completed_source` hashes the actual synthetic release tree before/after `load_source`; before repair exactly the timestamped audit differed.
+- **Nguyên nhân cốt lõi (Root Cause):** Reused v1 audit API publishes its result into the supplied source root.
+- **Giả định sai lầm (Wrong Assumptions):** An audit/validation function is necessarily read-only.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** v2 uses checksum-verified v1 readers plus an in-memory duplicate check; the original producers remain unchanged. Whole-source hash-tree equality is asserted after rereading.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Verify source immutability by content receipts; do not call producers when validating completed inputs.
+
+## [ERR-20261016-04] Repeated worker timeouts had no escalation to attention
+- **Triệu chứng (Symptom):** Two real timed-out workers both returned partial, allowing indefinite operator retries of an impossible unit.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** `test_repeated_real_worker_timeout_requires_attention` launches actual workers with a 1 ms fixture deadline; before repair the second call remained TimeoutError instead of attention.
+- **Nguyên nhân cốt lõi (Root Cause):** Wall timeout state was not persisted per immutable unit.
+- **Giả định sai lầm (Wrong Assumptions):** A resumable partial is an adequate classification for every repeated timeout.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Persist unit-bound timeout counts, reap each worker and block after the second timeout with no commit. A single unit's 900 s budget covers its bounded iteration-escalation sequence.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Retry must be bounded and identity-bound; timeout never publishes a completed fit.
+
+## [ERR-20261016-05] A diagnostic trace occupied the conveyor proof namespace
+- **Triệu chứng (Symptom):** Full regression had491passes but the proof-reader test selected a raw CLI error trace as its latest conveyor proof.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** `Results/proofs/test_evidence_20261016_013649.log`; `tests/test_pipeline_stations.py::TestPipelineStations::test_station_2_execution_generates_proof_log`.
+- **Nguyên nhân cốt lõi (Root Cause):** A manually saved reproduction log used the reserved test_evidence prefix without the collector schema; lexical ordering made it appear newest.
+- **Giả định sai lầm (Wrong Assumptions):** Every diagnostic file may share the automated collector prefix.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Move the raw trace to the private execution directory, preserving its bytes, and leave the existing proof reader unchanged. Rerun the actual collector regression and full conveyor after relocation.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Reserve automated evidence names for schema-compliant collector output; keep arbitrary traces in their own namespace.

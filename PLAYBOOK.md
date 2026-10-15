@@ -176,3 +176,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261015-04] Contents API503 trong lúc encoder vẫn sống, backoff và lọc proxy query: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
 
 - [ERR-20261015-05] Schema CSV và numerical equivalence trong đối chiếu OOF: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-01..05] R0–R3 canonical resume identities, CLI worker entry, read-only source validation and bounded timeout escalation: see [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

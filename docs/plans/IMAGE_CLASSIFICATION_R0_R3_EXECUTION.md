@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.0** · trạng thái **đã chốt thiết kế, chưa triển khai/chạy R1–R3**.
+Ngày: **16/10/2026** · phiên bản **1.0** · trạng thái **P1 đã triển khai và kiểm thử local; CI/pilot dữ liệu thật đang chờ**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -98,7 +98,7 @@ L2 Normalizer → StandardScaler không giữ unit-norm ở đầu ra cuối. Ph
 - Lưu warnings, n_iter, thời gian, finite coefficients/scores và objective cho từng fit. Xác minh dtypes/precision nhất quán bằng fixture; đổi dtype phải vào descriptor, không âm thầm đổi khi resume.
 - Với cùng lambda/train/validation, control SAGA so với R2 L-BFGS: max chênh score ≤ 1e−3 và chênh relative objective ≤ 1e−4. Objective là weighted mean log loss + lambda/2 × ||w||², intercept không penalty; relative denominator = max(1, |objective R2|).
 - Nếu control không đạt, không kết luận ElasticNet tốt/xấu do sparsity. Lưu lỗi số học và xử lý convergence/implementation, không thay tolerance theo outer AUROC. B1 R0 vẫn giữ nguyên.
-- Chạy từng fit trong worker có thể hủy và join; timeout mỗi attempt = min(15 phút, thời gian còn lại trước hard deadline trừ reserve). Hết giờ thì dừng worker của job, không publish artifact dở; parent lưu receipt và cleanup. Không chỉ kiểm deadline trước khi gọi một fit SAGA dài. Nếu timeout lặp lại ở giới hạn đã khóa, đánh dấu attention_required thay vì retry vô hạn.
+- Chạy từng fit trong worker có thể hủy và join; timeout toàn bộ worker của mỗi fit (gồm retry) = min(15 phút, thời gian còn lại trước hard deadline trừ reserve). Hết giờ thì dừng worker của job, không publish artifact dở; parent lưu receipt và cleanup. Không chỉ kiểm deadline trước khi gọi một fit SAGA dài. Nếu cùng đơn vị timeout hai lần, đánh dấu attention_required thay vì retry vô hạn.
 
 ## 6. Luồng thực thi, đầu vào và đầu ra từng bước
 
