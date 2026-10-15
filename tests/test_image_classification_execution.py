@@ -171,6 +171,175 @@ def test_e2e_producer_to_readonly_n0_and_completed_cache_selection(
     assert _snapshot_tree(produced.feature_root) == feature_before
 
 
+def test_feature_release_inspection_resumes_partial_and_preserves_complete_cache(
+    tmp_path: Path,
+) -> None:
+    fixture = make_original_image_fixture(tmp_path / "source", patients=12)
+    inventory_path = core.build_original_image_inventory(
+        core.OriginalImageInventoryConfig(
+            metadata=fixture.metadata,
+            archives=fixture.archives,
+            output_root=tmp_path / "inventory",
+        )
+    )
+    output_root = tmp_path / "features" / "A1"
+    config = core.FeatureExtractionConfig(
+        batch_size=4,
+        shard_size=8,
+        max_long_edge=48,
+        device="cpu",
+        budget_minutes=5,
+        reserve_minutes=0,
+    )
+    encoder = TinyPixelEncoder()
+
+    absent = execution.inspect_feature_release(
+        inventory_path, output_root, encoder, config
+    )
+    assert absent.state is execution.FeatureReleaseState.ABSENT
+    assert absent.committed_image_ids == ()
+    assert absent.completed_release is None
+    assert not output_root.exists()
+
+    partial_root = core.extract_original_image_features(
+        inventory_path,
+        output_root,
+        tmp_path / "weights",
+        encoder=encoder,
+        config=config,
+        archive_paths={4: fixture.archives[4], 10: fixture.archives[10]},
+    )
+    partial_status = json.loads((partial_root / "status.json").read_text(encoding="utf-8"))
+    assert partial_status["state"] == "partial"
+    assert partial_status["committed_image_count"] == 24
+    partial_before = _snapshot_tree(partial_root)
+    old_shard_hashes = {
+        path.name: file_hash(path / "commit.json")
+        for path in sorted((partial_root / "features").glob("part-*"))
+    }
+
+    resumable = execution.inspect_feature_release(inventory_path, output_root, encoder, config)
+    assert resumable.state is execution.FeatureReleaseState.RESUMABLE
+    assert resumable.run_root == partial_root
+    assert len(resumable.committed_image_ids) == 24
+    assert resumable.completed_release is None
+    assert _snapshot_tree(partial_root) == partial_before
+
+    resumed_encoder = TinyPixelEncoder()
+    resumed_root = core.extract_original_image_features(
+        inventory_path,
+        output_root,
+        tmp_path / "weights",
+        encoder=resumed_encoder,
+        config=config,
+        archive_paths=fixture.archives,
+    )
+    assert resumed_root == partial_root
+    assert resumed_encoder.calls == 3
+    assert {
+        path.name: file_hash(path / "commit.json")
+        for path in sorted((resumed_root / "features").glob("part-*"))
+        if path.name in old_shard_hashes
+    } == old_shard_hashes
+
+    complete_before = _snapshot_tree(resumed_root)
+    complete = execution.inspect_feature_release(inventory_path, output_root, resumed_encoder, config)
+    assert complete.state is execution.FeatureReleaseState.COMPLETE
+    assert complete.completed_release is not None
+    assert complete.completed_release.run_root == resumed_root
+    assert len(complete.committed_image_ids) == 36
+    assert _snapshot_tree(resumed_root) == complete_before
+
+
+@pytest.mark.parametrize("mutation", ("descriptor", "status_count", "status_symlink"))
+def test_resumable_feature_release_inspection_fails_closed_without_writes(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    fixture = make_original_image_fixture(tmp_path / "source", patients=12)
+    inventory_path = core.build_original_image_inventory(
+        core.OriginalImageInventoryConfig(
+            metadata=fixture.metadata,
+            archives=fixture.archives,
+            output_root=tmp_path / "inventory",
+        )
+    )
+    output_root = tmp_path / "features" / "A1"
+    config = core.FeatureExtractionConfig(
+        batch_size=4,
+        shard_size=8,
+        max_long_edge=48,
+        device="cpu",
+        budget_minutes=5,
+        reserve_minutes=0,
+    )
+    run_root = core.extract_original_image_features(
+        inventory_path,
+        output_root,
+        tmp_path / "weights",
+        encoder=TinyPixelEncoder(),
+        config=config,
+        archive_paths={4: fixture.archives[4], 10: fixture.archives[10]},
+    )
+    if mutation == "descriptor":
+        manifest_path = run_root / "release.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["descriptor"]["preprocessing"]["max_long_edge"] = 999
+        _write_json(manifest_path, manifest)
+        error_match = "manifest does not match"
+    elif mutation == "status_count":
+        status_path = run_root / "status.json"
+        status = json.loads(status_path.read_text(encoding="utf-8"))
+        status["committed_image_count"] -= 1
+        _write_json(status_path, status)
+        error_match = "invalid committed/remaining image counts"
+    else:
+        status_path = run_root / "status.json"
+        actual_status = run_root / "status.actual.json"
+        status_path.rename(actual_status)
+        status_path.symlink_to(actual_status.name)
+        error_match = "must not be symlinks"
+    before = _snapshot_tree(run_root)
+
+    with pytest.raises(ValueError, match=error_match):
+        execution.inspect_feature_release(inventory_path, output_root, TinyPixelEncoder(), config)
+
+    assert _snapshot_tree(run_root) == before
+
+
+def test_complete_feature_release_tampering_is_rejected_without_repair(
+    tmp_path: Path,
+) -> None:
+    produced = _produce_artifacts(tmp_path / "producer")
+    before = _snapshot_tree(produced.feature_root)
+    complete = execution.inspect_feature_release(
+        produced.inventory_path,
+        produced.feature_root.parents[1],
+        TinyPixelEncoder(),
+        produced.config,
+    )
+    assert complete.state is execution.FeatureReleaseState.COMPLETE
+    assert _snapshot_tree(produced.feature_root) == before
+
+    matrix_path = produced.feature_root / "features" / "part-000000" / "features.npy"
+    with matrix_path.open("r+b") as stream:
+        stream.seek(-1, 2)
+        byte = stream.read(1)
+        stream.seek(-1, 2)
+        stream.write(bytes([byte[0] ^ 1]))
+    tampered_snapshot = _snapshot_tree(produced.feature_root)
+
+    with pytest.raises(ValueError, match="checksum failed"):
+        execution.inspect_feature_release(
+            produced.inventory_path,
+            produced.feature_root.parents[1],
+            TinyPixelEncoder(),
+            produced.config,
+        )
+
+    assert _snapshot_tree(produced.feature_root) == tampered_snapshot
+
+
 @pytest.mark.parametrize("pin_field", ("expected_audit_id", "expected_commit_id", "expected_commit_sha256"))
 def test_pinned_audit_mismatch_is_rejected_without_writes(
     tmp_path: Path, pin_field: str,

@@ -85,6 +85,26 @@ class CompletedFeatureRelease:
     status: dict[str, Any]
 
 
+class FeatureReleaseState(str, Enum):
+    """Read-only disposition of the exact feature-release identity."""
+
+    ABSENT = "absent"
+    RESUMABLE = "resumable"
+    COMPLETE = "complete"
+
+
+@dataclass(frozen=True)
+class FeatureReleaseInspection:
+    """Verified state of one exact release without invoking its producer."""
+
+    state: FeatureReleaseState
+    run_root: Path
+    release_id: str
+    committed_image_ids: tuple[str, ...]
+    completed_release: CompletedFeatureRelease | None = None
+    status: dict[str, Any] | None = None
+
+
 @dataclass(frozen=True)
 class ExecutionAttemptPaths:
     """Per-attempt evidence location plus stable, shared cache roots."""
@@ -498,6 +518,196 @@ def select_completed_feature_release(
         features=features,
         rows=tuple(dict(row) for row in rows),
         release=loaded_release,
+        status=status,
+    )
+
+
+def inspect_feature_release(
+    inventory_path: Path,
+    output_root: Path,
+    encoder: core.ImageFeatureEncoder,
+    config: core.FeatureExtractionConfig,
+) -> FeatureReleaseInspection:
+    """Classify the exact release as absent, safe to resume, or verified complete.
+
+    This reader never repairs manifests or statuses. An absent identity may be
+    created by the producer; a resumable identity has matching metadata and
+    verified committed shards; a complete identity is accepted only through
+    :func:`select_completed_feature_release`. Any lock, symlink, identity
+    mismatch, inconsistent completion claim, or malformed partial state fails
+    closed so callers cannot silently rewrite a completed or corrupt cache.
+    """
+    inventory_file = Path(inventory_path).expanduser()
+    inventory = _validate_inventory_identity(inventory_file)
+    inventory_sha256 = file_hash(inventory_file)
+    config.validate()
+    descriptor = core._release_descriptor(inventory, encoder, config)
+    if descriptor.get("smoke") is not False:
+        raise ValueError("Smoke feature releases cannot be selected for a production resume.")
+    release_id = core.fingerprint(descriptor)
+    output = Path(output_root).expanduser()
+    if output.is_symlink():
+        raise ValueError("Feature output root must not be a symlink.")
+    if output.exists() and not output.is_dir():
+        raise ValueError("Feature output root is not a directory.")
+    runs_root = output / "runs"
+    if runs_root.is_symlink():
+        raise ValueError("Feature runs directory must not be a symlink.")
+    if not runs_root.exists():
+        if file_hash(inventory_file) != inventory_sha256:
+            raise ValueError("Image inventory changed while the release state was inspected.")
+        return FeatureReleaseInspection(FeatureReleaseState.ABSENT, runs_root / release_id, release_id, ())
+    if not runs_root.is_dir():
+        raise ValueError("Feature runs path is not a directory.")
+
+    run_root = runs_root / release_id
+    if run_root.is_symlink():
+        raise ValueError("Matching feature release path must not be a symlink.")
+    if not run_root.exists():
+        if file_hash(inventory_file) != inventory_sha256:
+            raise ValueError("Image inventory changed while the release state was inspected.")
+        return FeatureReleaseInspection(FeatureReleaseState.ABSENT, run_root, release_id, ())
+    if not run_root.is_dir():
+        raise ValueError("Matching feature release path is not a directory.")
+    lock_path = run_root / "run.lock"
+    if lock_path.exists() or lock_path.is_symlink():
+        raise ValueError("Matching feature release still has a writer lock.")
+
+    release_path = run_root / "release.json"
+    status_path = run_root / "status.json"
+    if release_path.is_symlink() or status_path.is_symlink():
+        raise ValueError("Feature release manifest and status must not be symlinks.")
+    release_sha256 = file_hash(release_path) if release_path.is_file() else None
+    status_sha256 = file_hash(status_path) if status_path.is_file() else None
+    release = _read_json_object(release_path, "feature release manifest")
+    status = _read_json_object(status_path, "feature release status")
+    expected_ids = [str(row["image_id"]) for row in inventory["images"]]
+    expected_ids_sha256 = hashlib.sha256("\n".join(expected_ids).encode()).hexdigest()
+    if (release.get("release_id") != release_id
+            or release.get("inventory_id") != inventory["inventory_id"]
+            or release.get("descriptor") != descriptor
+            or release.get("image_count") != len(expected_ids)
+            or release.get("image_ids") != expected_ids
+            or release.get("smoke") is not False):
+        raise ValueError("Feature release manifest does not match the exact inventory/encoder identity.")
+    status_expected_count = status.get("expected_image_count")
+    if (isinstance(status_expected_count, bool)
+            or not isinstance(status_expected_count, int)
+            or status_expected_count != len(expected_ids)
+            or status.get("schema_version") != 1
+            or status.get("protocol") != core.CLASSIFICATION_PROTOCOL
+            or status.get("release_id") != release_id
+            or status.get("inventory_id") != inventory["inventory_id"]
+            or status.get("expected_image_ids_sha256") != expected_ids_sha256
+            or status.get("smoke") is not False
+            or status.get("max_long_edge") != config.max_long_edge):
+        raise ValueError("Feature release status does not match its expected inventory/configuration.")
+
+    completion_markers = (
+        release.get("extraction_complete") is True,
+        release.get("training_ready") is True,
+        status.get("state") == "complete",
+        status.get("training_ready") is True,
+    )
+    if any(completion_markers):
+        if not all(completion_markers):
+            raise ValueError("Feature release manifest/status make inconsistent completion claims.")
+        completed = select_completed_feature_release(inventory_file, output, encoder, config)
+        if completed is None:
+            raise ValueError("Completed feature release disappeared during read-only verification.")
+        committed_ids = tuple(expected_ids)
+        if (file_hash(release_path) != release_sha256
+                or file_hash(status_path) != status_sha256
+                or file_hash(inventory_file) != inventory_sha256
+                or lock_path.exists()
+                or lock_path.is_symlink()):
+            raise ValueError("Feature release changed while its complete state was being verified.")
+        return FeatureReleaseInspection(
+            FeatureReleaseState.COMPLETE,
+            run_root,
+            release_id,
+            committed_ids,
+            completed_release=completed,
+            status=status,
+        )
+
+    if (release.get("extraction_complete") is not False
+            or release.get("training_ready") is not False
+            or status.get("state") not in ("running", "partial", "failed")
+            or (status.get("training_ready") is not None
+                and status.get("training_ready") is not False)):
+        raise ValueError("Feature release is neither a consistent partial run nor a complete release.")
+    committed_count = status.get("committed_image_count")
+    remaining_count = status.get("remaining_image_count")
+    if (isinstance(committed_count, bool)
+            or not isinstance(committed_count, int)
+            or isinstance(remaining_count, bool)
+            or not isinstance(remaining_count, int)
+            or not 0 <= committed_count <= len(expected_ids)
+            or remaining_count != len(expected_ids) - committed_count):
+        raise ValueError("Partial feature status has invalid committed/remaining image counts.")
+
+    features_root = run_root / "features"
+    if features_root.is_symlink():
+        raise ValueError("Partial feature shard directory must not be a symlink.")
+    if features_root.exists() and not features_root.is_dir():
+        raise ValueError("Partial feature shard path is not a directory.")
+    if features_root.is_dir() and any(features_root.iterdir()):
+        _preflight_feature_shards(run_root, release_id)
+    existing_by_id = core._existing_shards(run_root, release_id)
+    unexpected_ids = set(existing_by_id) - set(expected_ids)
+    if unexpected_ids:
+        raise ValueError(f"Partial feature cache contains unexpected image IDs: {sorted(unexpected_ids)[:5]}.")
+    committed_ids = tuple(image_id for image_id in expected_ids if image_id in existing_by_id)
+    if len(committed_ids) != len(existing_by_id) or len(committed_ids) != committed_count:
+        raise ValueError("Partial feature status count does not match verified committed shards.")
+    committed_ids_sha256 = hashlib.sha256("\n".join(committed_ids).encode()).hexdigest()
+    if status.get("committed_image_ids_sha256") != committed_ids_sha256:
+        raise ValueError("Partial feature status does not match verified committed image IDs.")
+
+    inventory_rows = {str(row["image_id"]): row for row in inventory["images"]}
+    verified_rows: set[str] = set()
+    if features_root.is_dir():
+        for shard_path in sorted(features_root.iterdir()):
+            commit = json.loads((shard_path / "commit.json").read_text(encoding="utf-8"))
+            if (commit.get("inventory_id") != inventory["inventory_id"]
+                    or commit.get("feature_dim") != encoder.feature_dim
+                    or commit.get("dtype") != "float32"):
+                raise ValueError("Partial feature shard commit has an incompatible inventory or feature schema.")
+            with (shard_path / "rows.jsonl").open(encoding="utf-8") as stream:
+                for line in stream:
+                    row = json.loads(line)
+                    image_id = str(row.get("image_id", ""))
+                    expected = inventory_rows.get(image_id)
+                    if expected is None:
+                        raise ValueError(f"Partial feature shard contains an unknown image ID: {image_id}.")
+                    for field in _SOURCE_FEATURE_FIELDS:
+                        if row.get(field) != expected.get(field):
+                            raise ValueError(f"Partial feature source field {field!r} differs for {image_id}.")
+                    for field in ("original_width", "original_height", "padded_width", "padded_height"):
+                        value = row.get(field)
+                        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                            raise ValueError(f"Partial feature dimension {field!r} is invalid for {image_id}.")
+                    if row["padded_width"] != config.max_long_edge or row["padded_height"] != config.max_long_edge:
+                        raise ValueError(f"Partial feature canvas dimensions differ for {image_id}.")
+                    if not isinstance(row.get("source_format"), str) or not row["source_format"]:
+                        raise ValueError(f"Partial feature source format is invalid for {image_id}.")
+                    if image_id in verified_rows:
+                        raise ValueError(f"Partial feature shards duplicate image ID: {image_id}.")
+                    verified_rows.add(image_id)
+    if verified_rows != set(committed_ids):
+        raise ValueError("Partial feature rows differ from the verified committed image IDs.")
+    if (file_hash(release_path) != release_sha256
+            or file_hash(status_path) != status_sha256
+            or file_hash(inventory_file) != inventory_sha256
+            or lock_path.exists()
+            or lock_path.is_symlink()):
+        raise ValueError("Partial feature release changed while its committed shards were being verified.")
+    return FeatureReleaseInspection(
+        FeatureReleaseState.RESUMABLE,
+        run_root,
+        release_id,
+        committed_ids,
         status=status,
     )
 
