@@ -1,26 +1,38 @@
 # Kế hoạch dự án
 
-Thư mục này lưu kế hoạch tham chiếu, lộ trình chuẩn bị dữ liệu và huấn luyện MIL. Các tài liệu phân biệt dữ kiện đã xác nhận, tác vụ đang chạy và đề xuất chưa thực hiện.
+Mục tiêu hiện tại: **một ảnh gốc 4×, 10× hoặc 40× → có/không ung thư**, dùng nhãn bác sĩ của từng ảnh. Patient ID dùng chia dữ liệu, không làm mục tiêu chẩn đoán ca. MIL cấp ca và clustering patch là lịch sử tham khảo.
 
-## Kế hoạch hiện tại
+## Kế hoạch hiện hành — 16/10/2026
 
-- [Hai nhánh song song A/B](CLUSTERING_DUAL_TRACK_EXECUTION.md): atlas/histogram và negative-reference novelty/MIL; [runbook](../DUAL_TRACK_RUN.md). Source đang được phát triển/kiểm thử, full study mới chưa được báo nghiệm thu.
+**[IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)** là nguồn điều phối duy nhất cho lượt R0–R3:
 
-- **Thực thi tiếp — kế hoạch train:** [`MIL_TRAINING_PLAN.md`](MIL_TRAINING_PLAN.md) — v1.1, thiết kế E0–E4, nested CV 3×2, các bước T0–T7, local→Colab, dry-run/checkpoint, benchmark T4, lưu trữ/resume, đánh giá và checklist. Đã lưu kế hoạch; chưa chạy train.
-- **Phụ lục độ tin cậy:** [`COLAB_TRAINING_RELIABILITY.md`](COLAB_TRAINING_RELIABILITY.md) — train loop nhẹ local, L0–L3/C0–C3, các rủi ro Colab Free, test lỗi giả lập F01–F12, checkpoint commit và giới hạn tài nguyên.
-- **Phụ lục nguyên lý:** [`MIL_MODEL_EXPLAINED.md`](MIL_MODEL_EXPLAINED.md) — giải thích CNN frozen, projection, gated attention, fusion, loss/gradient, custom và bài báo; [bản HTML độc lập](../../.lavish/MIL_MODEL_EXPLAINED.html).
-- **Đã nghiệm thu trước train:** [`PRETRAIN_FINALIZATION.md`](PRETRAIN_FINALIZATION.md) — CPU, duplicate review, hai cohort, bags/splits, verify và bàn giao.
+| Nhánh | Công việc |
+|---|---|
+| R0 | Giữ B1 RetCCL512 + global L2 LR làm đối chứng bất biến |
+| R1 | Cùng cache, head riêng theo vật kính |
+| R2 | Sample L2 Normalizer → StandardScaler → global L2 LR |
+| R3 | Cùng preprocessing R2 + ElasticNet, có certified full-batch L2 solver control |
 
-- [`MIL_MULTISCALE_REFERENCE.md`](MIL_MULTISCALE_REFERENCE.md): kế hoạch phân loại mô học tuyến tiền liệt bằng MIL ở 4×, 10×, 40×; gồm dữ liệu, encoder pretrained/frozen, features, bags, protocol và đánh giá dự kiến.
-- [`PRETRAIN_EXECUTION.md`](PRETRAIN_EXECUTION.md): lộ trình G0–G5 lịch sử v1.1; trạng thái tại thời điểm trích xuất chưa xong. Đọc kế hoạch tiếp tục phía trên cho việc còn lại.
+Kế hoạch chốt nguồn/identities, shared patient assignments, weights và grids, 186 nested fits trước refit, checkpoint/resume, kiểm thử, báo cáo, gate và ranh giới external test. **Đã hoàn tất186 fit và27controls trên Colab CPU; giữR0 theo gate.** [Báo cáo kết quả](../reports/R0_R3_RESULTS_20261016.md), Drive/local handoff đã verify. Việc tiếp theo là thiết kế kiểm định ngoài; không tự mở rộng grid trên cùng OOF.
 
-Bằng chứng kiểm kê và hình minh họa được lưu trong `Results/planning_20261010/`.
+- [Đường dẫn kế hoạch chính](IMAGE_CLASSIFICATION_NEXT_STEPS.md) và [hướng nghiên cứu](IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md) đã chuyển sang R0–R3.
+- [Báo cáo frozen ngày 15/10](../reports/IMAGE_FROZEN_COMPARISON_20261015.md): 2.802 ảnh/18 người; ImageNet512 AUROC 0,729, ImageNet1024 0,787, RetCCL512 0,870. Cache/model/OOF đã lưu bền vững, T4 đã dừng; đây là kết quả nội bộ.
+- Phân tích overfitting/test độc lập và phản biện khuyến nghị được giữ local ở Results/image_classification/research_validation_20261016/.
 
-## Dữ liệu patch và extractor
+## Kế hoạch phân loại ảnh đã được thay thế
 
-- [Hướng dẫn import](../PRECUT_IMPORT.md) và [Notebook import](../../notebooks/Colab_PreCut_Import.ipynb): inventory, smoke, import và audit patch; bản toolkit hiện đi cùng nhánh training, chưa merge vào main.
-- [Hướng dẫn extractor](../../dist/HUONG_DAN_CHAY.md) và [Notebook features bàn giao](../../dist/Colab_Feature_Extraction.ipynb): ResNet50 ImageNet V1 frozen chạy theo ZIP hoặc thư mục PNG.
+- [Snapshot tiếp tục ngày 13/10](IMAGE_CLASSIFICATION_NEXT_STEPS_20261013_ARCHIVE.md): giữ thiết kế và các trạng thái ở thời điểm viết; không phải hàng đợi chạy hiện tại.
+- [Hai hướng nghiên cứu ngày 14/10](IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS_20261014_ARCHIVE.md): lịch sử N0–N3; hai nhánh frozen đã hoàn tất. Không tự chạy fine-tune hoặc thử seed khác theo bản này.
+- [Lần thử nhãn mạnh đầu tiên](IMAGE_STRONG_LABEL_COLAB_EXECUTION.md): lịch sử ngày12/10; không lấy tên runtime/mount snapshot làm trạng thái hiện tại.
 
-Snapshot nghiệm thu 11/10/2026: nguồn 25 ZIP/148.991 vector giữ nguyên; governance 18 người, nhãn 10/8; duplicate review đã xong. Hai bundle common16/all18 đã build/verify `data_ready` trên CPU thiha; loader 34/34 lượt ca qua. Xem [báo cáo hoàn tất](../../Results/planning_20261010/pretrain/final_verified_20261011/BAO_CAO_HOAN_TAT.md). Chưa train MIL; tự tắt máy vẫn đã hủy.
+## Lịch sử và tài liệu tham khảo của mục tiêu cũ
 
-- [MIL_T4_OPTIMIZATION_PLAN.md](MIL_T4_OPTIMIZATION_PLAN.md): nghiên cứu cache GPU/AMP/nén head, benchmark và cổng đánh giá; chưa triển khai vào baseline.
+- [CLUSTERING_DUAL_TRACK_EXECUTION.md](CLUSTERING_DUAL_TRACK_EXECUTION.md): atlas/histogram và negative-reference novelty/MIL; không thuộc luồng R0–R3.
+- [CLUSTERING_WEAK_LABEL_STRATEGY.md](CLUSTERING_WEAK_LABEL_STRATEGY.md): nền lý luận nhãn yếu và truy hồi patch; không thay nhãn toàn ảnh đã chốt.
+- [MIL_TRAINING_PLAN.md](MIL_TRAINING_PLAN.md): trainer E0–E4 và đánh giá cấp ca, giữ làm tham khảo.
+- [COLAB_TRAINING_RELIABILITY.md](COLAB_TRAINING_RELIABILITY.md): rủi ro ngắt phiên, checkpoint và thử lỗi; áp dụng nguyên tắc phù hợp, không tự chạy lại MIL.
+- [MIL_MODEL_EXPLAINED.md](MIL_MODEL_EXPLAINED.md): nguyên lý mô hình cấp ca cũ.
+- [PRETRAIN_FINALIZATION.md](PRETRAIN_FINALIZATION.md), [PRETRAIN_EXECUTION.md](PRETRAIN_EXECUTION.md): lịch sử chuẩn bị patch/bags.
+- [MIL_MULTISCALE_REFERENCE.md](MIL_MULTISCALE_REFERENCE.md), [MIL_T4_OPTIMIZATION_PLAN.md](MIL_T4_OPTIMIZATION_PLAN.md): các kế hoạch tham chiếu trước khi chuyển mục tiêu.
+
+Giữ dữ liệu/nhãn/bằng chứng lịch sử, không xóa hoặc ghi đè để cập nhật kế hoạch. Không có lịch tự tắt máy Na trong công việc hiện hành.

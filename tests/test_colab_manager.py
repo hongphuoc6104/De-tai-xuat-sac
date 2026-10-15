@@ -72,6 +72,11 @@ if command == "new" and os.environ.get("FAKE_NEW_ERROR"):
 if command == "status" and alias in json.loads(os.environ.get("FAKE_MISSING_SESSIONS", "[]")):
     print("Session not found (404)", file=sys.stderr)
     raise SystemExit(1)
+if command == "status" and "--session" in args:
+    session = args[args.index("--session") + 1]
+    if session in json.loads(os.environ.get("FAKE_MISSING_SUCCESS_SESSIONS", "[]")):
+        print(os.environ.get("FAKE_MISSING_SUCCESS_MESSAGE", "No active sessions found on server."))
+        raise SystemExit(0)
 if command == "new":
     print("created " + args[args.index("--session") + 1])
 elif command == "usage":
@@ -208,6 +213,26 @@ def test_capacity_classifier_only_accepts_explicit_resource_denials():
     assert not colab_manager.is_capacity_unavailable("unexpected traceback")
 
 
+def test_missing_session_classifier_handles_success_output_and_preserves_real_errors():
+    """Missing output is authoritative at exit 0, while auth/network text is not."""
+    assert colab_manager.is_session_missing(
+        colab_manager.CommandResult(0, "[colab] Session 'gone' not found.")
+    )
+    assert colab_manager.is_session_missing(
+        colab_manager.CommandResult(0, "No active sessions found on server.")
+    )
+    assert not colab_manager.is_session_missing(
+        colab_manager.CommandResult(0, "Session is active.")
+    )
+    assert not colab_manager.is_session_missing(
+        colab_manager.CommandResult(0, "No active sessions found after connection timed out.")
+    )
+    max_length_session = "s" * 64
+    assert colab_manager.is_session_missing(
+        colab_manager.CommandResult(0, f"[colab] Session '{max_length_session}' not found.")
+    )
+
+
 def test_recording_success_persists_last_profile_use_without_credentials(tmp_path: Path):
     """Successful session metadata is persisted without copying token contents."""
     token_path = tmp_path / "token.json"
@@ -273,6 +298,55 @@ def test_create_stops_on_auth_or_unknown_error_without_trying_next_profile(tmp_p
     assert json.loads(state_path.read_text(encoding="utf-8"))["sessions"] == []
 
 
+def test_create_timeout_does_not_track_zero_exit_missing_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A timeout followed by an explicit missing response cannot become tracked success."""
+    registry = make_registry(tmp_path, ["primary"])
+    state_path = tmp_path / "state" / "state.json"
+    args = colab_manager.make_parser().parse_args(
+        [
+            "--profiles-file",
+            str(registry),
+            "--state-file",
+            str(state_path),
+            "--settings-file",
+            str(tmp_path / "config" / "settings.json"),
+            "--unit-dir",
+            str(tmp_path / "systemd"),
+            "--profile-command",
+            "unused-safe-stub",
+            "create",
+            "--session",
+            "timeout-missing",
+            "--yes",
+        ]
+    )
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def simulate_timeout_then_missing(
+        self: colab_manager.ColabProfileRunner,
+        alias: str,
+        arguments: list[str],
+        timeout: float = 120.0,
+    ) -> colab_manager.CommandResult:
+        calls.append((alias, tuple(arguments)))
+        if arguments[0] == "new":
+            return colab_manager.CommandResult(124, "", "Command timed out.", timed_out=True)
+        if arguments[0] == "status":
+            return colab_manager.CommandResult(0, "No active sessions found on server.\n", "")
+        raise AssertionError(f"unexpected profile command: {arguments[0]}")
+
+    monkeypatch.setattr(colab_manager.ColabProfileRunner, "run", simulate_timeout_then_missing)
+    monkeypatch.setattr(colab_manager, "start_timer_safely", lambda timer: None)
+    with pytest.raises(colab_manager.ManagerError, match="No session was tracked"):
+        colab_manager.create_session(args)
+
+    assert [arguments[0] for _, arguments in calls] == ["new", "status"]
+    assert colab_manager.StateStore(state_path).load()["sessions"] == []
+
+
 def test_connect_missing_session_never_creates_replacement(tmp_path: Path):
     """Reconnect reports a disappeared VM and does not allocate a replacement."""
     state_path = tmp_path / "state" / "state.json"
@@ -299,6 +373,63 @@ def test_connect_missing_session_never_creates_replacement(tmp_path: Path):
     assert [call[1] for call in calls] == ["status"]
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert state["sessions"][0]["ended_at"] is not None
+
+
+def test_connect_marks_zero_exit_missing_session_ended(tmp_path: Path):
+    """A successful CLI exit with explicit missing-session text closes tracking."""
+    state_path = tmp_path / "state" / "state.json"
+    store = colab_manager.StateStore(state_path)
+    colab_manager.record_created_session(
+        store,
+        "primary",
+        "gone-session",
+        "T4",
+        datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc),
+    )
+    registry = make_registry(tmp_path, ["primary"])
+    result = run_manager(
+        tmp_path,
+        "connect",
+        "--session",
+        "gone-session",
+        profiles_path=registry,
+        environment={
+            "FAKE_MISSING_SUCCESS_SESSIONS": json.dumps(["gone-session"]),
+            "FAKE_MISSING_SUCCESS_MESSAGE": "[colab] Session 'gone-session' not found.",
+        },
+    )
+    assert result.returncode == 2
+    assert "no longer exists" in result.stderr
+    calls = read_profile_calls(tmp_path / "profile-calls.jsonl")
+    assert [call[1:] for call in calls] == [["status", "--session", "gone-session"]]
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["sessions"][0]["ended_at"] is not None
+
+
+def test_watch_closes_interval_for_zero_exit_no_active_sessions(tmp_path: Path):
+    """The timer recognizes the CLI's no-active-sessions message despite exit 0."""
+    state_path = tmp_path / "state" / "state.json"
+    store = colab_manager.StateStore(state_path)
+    colab_manager.record_created_session(
+        store,
+        "primary",
+        "poll-gone",
+        "T4",
+        datetime(2026, 10, 9, 12, 0, tzinfo=timezone.utc),
+    )
+    registry = make_registry(tmp_path, ["primary"])
+    result = run_manager(
+        tmp_path,
+        "watch",
+        profiles_path=registry,
+        environment={"FAKE_MISSING_SUCCESS_SESSIONS": json.dumps(["poll-gone"])},
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Colab session ended: poll-gone" in result.stdout
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["sessions"][0]["ended_at"] is not None
+    calls = read_profile_calls(tmp_path / "profile-calls.jsonl")
+    assert [call[1:] for call in calls] == [["status", "--session", "poll-gone"]]
 
 
 def test_stop_requires_confirmation_before_remote_command(tmp_path: Path):
