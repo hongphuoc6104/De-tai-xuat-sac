@@ -26,7 +26,7 @@ import numpy as np
 from . import image_classification as core, image_classification_lab as lab, image_classification_studies as legacy
 from .io import atomic_json, file_hash, fingerprint
 
-PROTOCOL = "original-image-retccl-head-ablation-v2"
+PROTOCOL = "original-image-retccl-head-ablation-v3-float64"
 WORKER_MODULE = "histology_data.image_classification_r0_r3"
 ARMS = ("R1", "R2", "R2_SAGA_CONTROL", "R3")
 
@@ -40,7 +40,8 @@ class Config:
     iterations: tuple[int, ...] = (2000, 10000, 50000)
     seed: int = 17
     lbfgs_tol: float = 1e-4
-    saga_tol: float = 1e-6
+    normalized_lbfgs_tol: float = 1e-8
+    saga_tol: float = 1e-8
     score_tolerance: float = 1e-3
     objective_tolerance: float = 1e-4
     bootstrap_repeats: int = 2000
@@ -64,7 +65,7 @@ class Config:
                 or not 0 <= self.reserve_minutes < self.budget_minutes):
             raise ValueError("Invalid seed, bootstrap or budget.")
         if any(not math.isfinite(v) or v <= 0 for v in (
-                self.lbfgs_tol, self.saga_tol, self.score_tolerance,
+                self.lbfgs_tol, self.normalized_lbfgs_tol, self.saga_tol, self.score_tolerance,
                 self.objective_tolerance, self.fit_timeout_seconds, self.budget_minutes)):
             raise ValueError("Tolerances and deadlines must be finite positive values.")
 
@@ -267,8 +268,10 @@ def _worker(folder: Path) -> int:
         steps.append(("normalizer", Normalizer(norm="l2")))
     steps.append(("scaler", StandardScaler()))
     preprocessing = Pipeline(steps)
-    z = preprocessing.fit_transform(x)
-    ze = preprocessing.transform(evaluate)
+    # Preserve the exact preprocessing values, but optimize both solvers in
+    # double precision. SAGA otherwise inherits float32 from the feature cache.
+    z = np.asarray(preprocessing.fit_transform(x), dtype=np.float64, order="C")
+    ze = np.asarray(preprocessing.transform(evaluate), dtype=np.float64, order="C")
     saga = request["arm"] in {"R3", "R2_SAGA_CONTROL"}
     attempts = []
     start = time.monotonic()
@@ -320,7 +323,9 @@ class Runner:
         """Reuse only matching committed predictions and owned model bytes."""
         request = {"arm": arm, "lambda": penalty, "ratio": ratio,
                    "iterations": list(self.config.iterations), "seed": self.config.seed,
-                   "tol": self.config.saga_tol if arm in {"R3", "R2_SAGA_CONTROL"} else self.config.lbfgs_tol}
+                   "fit_dtype": "float64",
+                   "tol": self.config.saga_tol if arm in {"R3", "R2_SAGA_CONTROL"}
+                   else self.config.normalized_lbfgs_tol if arm == "R2" else self.config.lbfgs_tol}
         request["lambda"], request["ratio"] = float(penalty), float(ratio)
         binding = {"request": request, "scope": scope, "head": head, "split": split,
                    "train_ids": [self.source.rows[i]["image_id"] for i in train],

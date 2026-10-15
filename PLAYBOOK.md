@@ -177,4 +177,4 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 
 - [ERR-20261015-05] Schema CSV và numerical equivalence trong đối chiếu OOF: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
-- [ERR-20261016-01..05] R0–R3 canonical resume identities, CLI worker entry, read-only source validation and bounded timeout escalation: see [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+- [ERR-20261016-01..06] R0–R3 canonical resume identities, CLI worker entry, read-only source validation and bounded timeout escalation: see [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

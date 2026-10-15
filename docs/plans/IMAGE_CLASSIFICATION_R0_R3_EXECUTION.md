@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.0** · trạng thái **P1 đã triển khai và kiểm thử local; CI/pilot dữ liệu thật đang chờ**.
+Ngày: **16/10/2026** · phiên bản **1.1** · trạng thái **lượt v2 đã dừng đúng gate số học; đang kiểm thử bản precision v3 trước khi chạy tiếp**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -93,7 +93,7 @@ L2 Normalizer → StandardScaler không giữ unit-norm ở đầu ra cuối. Ph
 
 ### 5.4. Hội tụ và solver control
 
-- R1/R2 L-BFGS giữ `tol=1e−4` như B1; SAGA control/R3 dùng `tol=1e−6`. Không sử dụng `n_jobs=-1` làm lời hứa tăng tốc SAGA.
+- R1 L-BFGS giữ `tol=1e−4` như B1. R2 L-BFGS dùng `tol=1e−8`; SAGA control/R3 dùng `tol=1e−8`. Sau preprocessing, cả hai solver nhận cùng ma trận float64; raw cache và hình học preprocessing giữ nguyên. Không sử dụng `n_jobs=-1` làm lời hứa tăng tốc SAGA.
 - Mỗi fit bắt đầu với max_iter 2.000; nếu chưa hội tụ, retry giới hạn 10.000 rồi 50.000, cùng dữ liệu/seed/objective. Ghi mọi attempt. Nếu vẫn lỗi hoặc hết budget: `attention_required`/`partial`, không bỏ candidate hoặc trả điểm như đã hội tụ.
 - Lưu warnings, n_iter, thời gian, finite coefficients/scores và objective cho từng fit. Xác minh dtypes/precision nhất quán bằng fixture; đổi dtype phải vào descriptor, không âm thầm đổi khi resume.
 - Với cùng lambda/train/validation, control SAGA so với R2 L-BFGS: max chênh score ≤ 1e−3 và chênh relative objective ≤ 1e−4. Objective là weighted mean log loss + lambda/2 × ||w||², intercept không penalty; relative denominator = max(1, |objective R2|).
@@ -226,3 +226,9 @@ External test công khai như SICAPv2/TMA là hướng chuẩn bị riêng: audi
 - [RetCCL mã tác giả](https://github.com/Xiyue-Wang/RetCCL), [thiên lệch lựa chọn mô hình](https://jmlr.org/papers/v11/cawley10a.html), [CLAIM 2024](https://pubs.rsna.org/doi/10.1148/ryai.240300).
 
 **Việc kế tiếp khi được yêu cầu thực thi: P1 phát triển và kiểm thử head studies, chưa phải tạo T4 hoặc chạy CNN.** Không shutdown máy Na. Sau phiên CPU thực tế phải ngừng writers, verify backup, official flush/unmount Drive và dừng runtime dự án.
+
+## 13. Cập nhật precision ngày16/10 — không đổi tiêu chí chất lượng
+
+Lượt v2 giữ114fit đã commit rồi dừng tại control lambda0,5/inner1: maxscore delta0,002045 >0,001. Dữ liệu và preprocessing giữa hai solver giống hệt (maxdifference0); L-BFGS gradient còn7,89e−5, SAGA float32 còn1,63e−5. Đối chứng cùng dữ liệu ở float64 và L-BFGS tolerance1e−8 hạ chênh validation còn0,000108, không dùng nhãn hoặc metric outer để chọn sửa.
+
+Bản v3 ghi precision/tolerances vào scientific identity mới; không nới score/objective gate, không đổi folds, weights, grids hay nhãn. R0 và cacheB1 tiếp tục bất biến. Lượt114fit cũ giữ nguyên để audit; không gộp điểm của hai phiên bản số học. Đây là sửa độ chính xác tối ưu hóa cùng objective, không là bằng chứng đã khắc phục overfitting.

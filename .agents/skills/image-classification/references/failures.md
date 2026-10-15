@@ -171,3 +171,11 @@
 - **Giả định sai lầm (Wrong Assumptions):** Every diagnostic file may share the automated collector prefix.
 - **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Move the raw trace to the private execution directory, preserving its bytes, and leave the existing proof reader unchanged. Rerun the actual collector regression and full conveyor after relocation.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Reserve automated evidence names for schema-compliant collector output; keep arbitrary traces in their own namespace.
+
+## [ERR-20261016-06] Float32 SAGA and coarse L-BFGS termination failed the matched L2 control
+- **Triệu chứng (Symptom):** Production v2 stopped correctly after114committed fits; same-lambda L2 score delta0.002045 exceeded the predeclared0.001gate while objective delta was only4.30e−7.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** Private `Results/image_classification/r0_r3_20261016/execution/solver_control_failure.json` and `numerical_control_diagnostic.json`; local real-worker regression `test_normalized_solvers_use_high_accuracy_and_double_precision` fails before repair.
+- **Nguyên nhân cốt lõi (Root Cause):** SAGA inherited float32 coefficient arithmetic from cached features, while normalized L-BFGS stopped at tol1e−4. Both had converged by their stopping rules but were not equivalent to the required score accuracy.
+- **Giả định sai lầm (Wrong Assumptions):** No ConvergenceWarning implies interchangeable predictions across differently precise solvers, including under validation drift.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Same-source Colab diagnostic found identical transforms; double-precision SAGA and tighter L-BFGS reduced validation delta to0.000108 without outer labels/metrics. v3 casts classifier inputs tofloat64 and locks normalized solver tolerances1e−8, leaving the control gate unchanged. Old partial artifacts remain immutable; full regression and CI precede another production run.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Declare and test numerical precision and optimizer accuracy before attributing solver differences to regularization; preserve failed controls rather than relaxing gates after seeing them.

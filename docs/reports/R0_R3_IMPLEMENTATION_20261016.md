@@ -19,3 +19,9 @@ The two-fit cap is the technical L-BFGS/SAGA pilot. Remove it to resume the same
 This document records implementation, not completion of real-data experiments. Production results and runtime/Drive receipts belong in the private execution directory. No GPU, encoder extraction, source ZIP staging, patch labels or shutdown of the local machine is part of this run.
 
 Local verification:498 tests passed,1 optional skipped;422 assertion-bearing test methods. Proof:Results/proofs/test_evidence_20261016_014233.log. Critique/docs/lint/compile passed. CI and real-data CPU pilot remain separate gates.
+
+## Numerical protocol correction
+
+The first real-data v2 run stopped at its matched-solver gate after114committed fits, preserving them. A same-source diagnostic found identical preprocessing but differing precision and stopping accuracy. The corrected protocol `original-image-retccl-head-ablation-v3-float64` optimizes both solvers in float64 and uses normalized solver tolerances1e−8. It preserves source images/features, labels, folds, patient weighting, lambda/ratio grids and score/objective control thresholds. No outer performance metrics were used for this correction.
+
+Updated verification:499local tests passed,1optional skipped;423active-assertion methods. Evidence:Results/proofs/test_evidence_20261016_022457.log. Corrected code CI and real-data control remain pending; the old partial run is not a completed R0–R3 result.

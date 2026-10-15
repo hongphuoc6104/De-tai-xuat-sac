@@ -176,3 +176,21 @@ def test_reader_does_not_write_completed_source(frozen_source: ablation.Source) 
     after = {str(p.relative_to(root)): file_hash(p) for p in root.rglob('*') if p.is_file()}
     assert reread.receipt == frozen_source.receipt
     assert after == before
+
+
+def test_normalized_solvers_use_high_accuracy_and_double_precision(tmp_path: Path) -> None:
+    import joblib
+
+    rng = np.random.default_rng(37)
+    x = (5 + rng.normal(size=(64, 12))).astype(np.float32)
+    x[48:, :2] += 3
+    rows = [{"image_id": str(i), "patient_id": str(i // 2), "objective_lens": 4, "image_target": i % 2} for i in range(64)]
+    runner = ablation.Runner(ablation.Source(x, rows, {}, [], {}), tmp_path, ablation.Config())
+    predictions = []
+    for arm in ("R2", "R2_SAGA_CONTROL"):
+        p, _, path = runner.fit(arm, "numeric_fixture", "all", "inner-01", np.arange(48), np.arange(48, 64), .5)
+        model = joblib.load(path / "model.joblib")
+        assert model[-1].coef_.dtype == np.float64
+        assert model[-1].tol <= 1e-8
+        predictions.append(p)
+    assert np.max(np.abs(predictions[0] - predictions[1])) < 1e-3
