@@ -58,3 +58,11 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - **Giả định sai (Wrong Assumptions):** Upload API hoạt động như mkdir -p rồi copy.
 - **Giải pháp & Kiểm chứng (Resolution & Proof):** Tạo đúng parent trong kernel Colab đã mount, retry cùng hai payload; hai upload exit0. Không đổi VM, mount hay payload.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Xác nhận thư mục cha trước transfer; lọc proxy-token khỏi lỗi CLI trước khi đưa output vào báo cáo.
+
+### [ERR-20261015-03] DriveFS không lấy được thông tin xác thực dù T4 còn sống
+- **Triệu chứng (Symptom):** `drive.mount('/content/drive')` báo `ValueError: mount failed`; log DriveFS ghi `metadata_server_credential.cc:160`, HTTP404 và `BAD_RESPONSE_HTTP_CODE`.
+- **Đường dẫn tái hiện E2E (Reproduction Path):** Lệnh official CLI `drivemount` trên `histology-image-frozen-bop-r4-20261015`; bằng chứng đã lọc thông tin nhạy cảm tại `Results/image_classification/improvement_resume4_20261015/drive_mount_failure_receipt.json` trong checkout chính.
+- **Nguyên nhân cốt lõi (Root Cause):** Bước lấy thông tin xác thực Drive từ dịch vụ metadata nội bộ thất bại. Nguyên nhân phía backend trả404 chưa được xác định; server xác nhận T4 vẫn hoạt động, và filesystem chưa được mount.
+- **Giả định sai lầm (Wrong Assumptions):** Mọi lỗi404 đều có nghĩa VM đã mất; hoặc thông báo đã duyệt Google bảo đảm Drive đọc được trong kernel chạy công việc.
+- **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Người dùng chạy lại official CLI `drivemount` trên cùng VM; credentials propagation và mount thành công. Probe trong kernel CLI xác nhận mountpoint, MyDrive, nguồn và thư mục dự án đều đọc được. Receipt: `Results/image_classification/improvement_resume4_20261015/drive_mount_recovery_receipt.json`. Không sửa SDK, không force-remount và không cấp VM mới để chữa lỗi mount.
+- **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Phân biệt404 của kernel endpoint với404 khi DriveFS lấy credential; kiểm server và filesystem trước, rồi retry official mount trên VM còn sống và xác minh trong kernel sẽ chạy dữ liệu.
