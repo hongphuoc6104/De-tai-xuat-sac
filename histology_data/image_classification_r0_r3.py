@@ -11,9 +11,11 @@ import json
 import math
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import warnings
 from collections import Counter
@@ -247,13 +249,19 @@ def _bounded(command: list[str], timeout: float, log: Path) -> int:
         try:
             return process.wait(timeout=timeout)
         finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+            # A repeated notebook interrupt must not interrupt worker cleanup.
+            previous = signal.signal(signal.SIGINT, signal.SIG_IGN) if threading.current_thread() is threading.main_thread() else None
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+            finally:
+                if previous is not None:
+                    signal.signal(signal.SIGINT, previous)
 
 
 def _worker(folder: Path) -> int:
@@ -280,18 +288,20 @@ def _worker(folder: Path) -> int:
     logical_c = 1 / (request["lambda"] * float(weights.sum()))
     offset = np.zeros(z.shape[1], dtype=np.float64)
     weight_divisor = 1.0
-    if saga and request.get("condition_saga", False):
-        # Translation is absorbed by the unpenalized intercept. Scaling all
-        # weights and compensating C leaves C*weight and the objective intact.
-        offset = np.average(z, axis=0, weights=weights)
-        centered = z - offset
-        curvature = np.square(centered).sum(axis=1) + 1.0
-        weight_divisor = max(1.0, float(np.max(weights * curvature) / np.max(curvature)))
-    solver_z = z - offset
-    solver_weights = weights / weight_divisor
     attempts = []
     start = time.monotonic()
-    for limit in request["iterations"]:
+    for attempt, limit in enumerate(request["iterations"]):
+        # A conservative weighted bound may be much slower on easy scopes.
+        # Try the original solver first; condition only a nonconverged retry.
+        conditioned = bool(saga and request.get("condition_saga", False) and attempt > 0)
+        if conditioned:
+            # Translation is absorbed by the unpenalized intercept. Scaling
+            # all weights and compensating C preserves the logical objective.
+            offset = np.average(z, axis=0, weights=weights)
+            curvature = np.square(z - offset).sum(axis=1) + 1.0
+            weight_divisor = max(1.0, float(np.max(weights * curvature) / np.max(curvature)))
+        solver_z = z - offset
+        solver_weights = weights / weight_divisor
         model = LogisticRegression(C=logical_c * weight_divisor,
                                    solver="saga" if saga else "lbfgs", l1_ratio=request["ratio"],
                                    tol=request["tol"], random_state=request["seed"], max_iter=limit)
@@ -299,7 +309,7 @@ def _worker(folder: Path) -> int:
             warnings.simplefilter("always")
             model.fit(solver_z, y, sample_weight=solver_weights)
         converged = not any(issubclass(w.category, ConvergenceWarning) for w in caught)
-        attempts.append({"max_iter": limit, "iterations": model.n_iter_.tolist(),
+        attempts.append({"max_iter": limit, "iterations": model.n_iter_.tolist(), "conditioning": conditioned,
                          "warnings": [str(w.message) for w in caught], "converged": converged})
         if converged:
             break
@@ -310,7 +320,8 @@ def _worker(folder: Path) -> int:
                "solver_C": model.C, "solver_weight_divisor": weight_divisor,
                "solver_weight_sum": float(solver_weights.sum()),
                "solver_center_l2_norm": float(np.linalg.norm(offset)),
-               "conditioning": bool(saga and request.get("condition_saga", False))}
+               "conditioning": conditioned, "conditioning_requested": bool(request.get("condition_saga", False)),
+               "strategy": "unconditioned-first-then-weighted-bound" if saga else "lbfgs"}
     import resource
     receipt["max_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1024 if sys.platform != "darwin" else 1)
     atomic_json(folder / "fit_receipt.json", receipt)
@@ -352,6 +363,7 @@ class Runner:
         request["lambda"], request["ratio"] = float(penalty), float(ratio)
         if arm in {"R3", "R2_SAGA_CONTROL"}:
             request["condition_saga"] = self.config.condition_saga
+            request["saga_strategy"] = "unconditioned-first-then-weighted-bound"
         binding = {"request": request, "scope": scope, "head": head, "split": split,
                    "train_ids": [self.source.rows[i]["image_id"] for i in train],
                    "evaluation_ids": [self.source.rows[i]["image_id"] for i in evaluate],

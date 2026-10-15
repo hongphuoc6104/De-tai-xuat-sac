@@ -187,3 +187,19 @@
 - Wrong Assumptions: High max_iter or uniform weight rescaling alone guarantees timely convergence; either solver stopping criterion proves equivalence.
 - Resolution & Proof: Weighted train centering plus weighted curvature scaling, compensate C and restore intercept. Exact logical objective unchanged; actual scope converged3809iterations/120.84s, no warnings, validationdelta5.07e−6/objectivedelta1.45e−11. Small real subprocess E2E verifies pipeline inference, objective and C×weight invariance. Compatible L-BFGS cache reuse checks implementation/source/versions/splits/settings/locks and each payload; preserve byte identity/provenance, no old SAGA reuse.
 - Golden Prevention Rule: Verify numerical equivalence on training/inner data, preserve fixed gates and original objective, record solver transformations; never tune a fix using outer quality metrics.
+
+### [ERR-20261016-08] Universal conditioning slows easy ElasticNet scopes
+- Symptom: Exact R3/fold01/inner01/lambda0.05/ratio0.7 pilot exceeded600s with activeCPU/RSS260MB; original unconditioned version converged1809iterations/63.68s.
+- Reproduction Path: Results/image_classification/r0_r3_20261016/execution/{launch_pilot.py,pilot_worker_stat.txt,pilot_worker_status.txt,events_v4.jsonl}; tests/test_image_classification_r0_r3.py tests normalized fastpath and forced fallback with actual subprocess.
+- Root Cause: Uniform rescaling uses a conservative worst-sample curvature bound; effective steps can be unnecessarily small on easy weak-penalty scopes. Fixing one ill-conditioned scope does not imply universal speed.
+- Wrong Assumptions: A mathematically valid conditioner is beneficial to every scope.
+- Resolution & Proof: Unconditioned2000iteration first attempt; after nonconvergence use objective-equivalent conditioning for10000/50000 retries. Receipts identify actual phase. Preserve strict control/deadline and old checkpoints.
+- Golden Prevention Rule: Benchmark easy and difficult scopes; use bounded fallback, never relax convergence or quality gates to claim performance.
+
+### [ERR-20261016-09] Notebook interruption can leave an owned grandchild
+- Symptom: After Jupyter interrupt and parent exit, /proc scan still found ownedworker34412.
+- Reproduction Path: execution/official_runtime_bridge.py interrupt → verify_idle_writer.py; original launcher inherited kernel process group.
+- Root Cause: A second SIGINT reached _bounded inside process.poll during its finally cleanup; parent exited before terminating the worker. Notebook/kernel group propagation plus an additional cancellation signal can trigger this race.
+- Wrong Assumptions: Ending the notebook cell or parent proves every model worker is gone.
+- Resolution & Proof: Matched exact module/PIDs, TERM ownedworker and verified exit; operator_abort.json saved. Exact real-subprocess E2E test_second_sigint_during_cleanup_does_not_orphan_worker failed before fix and passed after temporarily ignoring SIGINT during finally cleanup, restoring the previous handler afterward. Future launchers isolate process group and clean that group after bounded graceful parent cancellation; always verify no writers before resume or unmount.
+- Golden Prevention Rule: Isolate owned compute groups, reap subprocesses and inspect live writers after interruptions; never infer cleanup from websocket closure alone.

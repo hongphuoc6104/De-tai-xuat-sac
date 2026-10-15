@@ -188,10 +188,12 @@ def test_normalized_solvers_use_high_accuracy_and_double_precision(tmp_path: Pat
     runner = ablation.Runner(ablation.Source(x, rows, {}, [], {}), tmp_path, ablation.Config())
     predictions = []
     for arm in ("R2", "R2_SAGA_CONTROL"):
-        p, _, path = runner.fit(arm, "numeric_fixture", "all", "inner-01", np.arange(48), np.arange(48, 64), .5)
+        p, receipt, path = runner.fit(arm, "numeric_fixture", "all", "inner-01", np.arange(48), np.arange(48, 64), .5)
         model = joblib.load(path / "model.joblib")
         assert model[-1].coef_.dtype == np.float64
         assert model[-1].tol <= 1e-8
+        assert not receipt["conditioning"]
+        assert receipt["solver_weight_divisor"] == 1
         predictions.append(p)
     assert np.max(np.abs(predictions[0] - predictions[1])) < 1e-3
 
@@ -210,7 +212,7 @@ def test_conditioned_worker_preserves_logical_objective_and_pipeline(tmp_path: P
     folder = tmp_path / 'conditioned'
     folder.mkdir()
     request = {'arm': 'R2_SAGA_CONTROL', 'lambda': .5, 'ratio': 0,
-               'iterations': [2000, 10000], 'tol': 1e-8, 'seed': 17, 'condition_saga': True}
+               'iterations': [1, 10000], 'tol': 1e-8, 'seed': 17, 'condition_saga': True}
     (folder / 'request.json').write_text(json.dumps(request))
     np.savez(folder / 'input.npz', x=x, y=y, weights=weights, evaluate=x[32:])
     result = subprocess.run([sys.executable, '-m', ablation.WORKER_MODULE, '--worker', str(folder)], capture_output=True, text=True)
@@ -218,6 +220,8 @@ def test_conditioned_worker_preserves_logical_objective_and_pipeline(tmp_path: P
     fitted = joblib.load(folder / 'model.joblib')
     receipt = json.loads((folder / 'fit_receipt.json').read_text())
     assert receipt['conditioning'] and receipt['solver_weight_divisor'] > 1
+    assert [a['conditioning'] for a in receipt['attempts']] == [False, True]
+    assert not receipt['attempts'][0]['converged']
     assert receipt['solver_C'] * receipt['solver_weight_sum'] == pytest.approx(receipt['C'] * weights.sum())
     reference = Pipeline([('normalizer', Normalizer()), ('scaler', StandardScaler())])
     z = reference.fit_transform(x).astype(np.float64)
@@ -271,3 +275,47 @@ def test_reuse_identical_lbfgs_units_only_and_source_unchanged(frozen_source: ab
     (unit / 'model.joblib').write_bytes(b'tampered')
     with pytest.raises(ValueError, match='checksum'):
         ablation.Runner(frozen_source, tmp_path / 'tamper', config, 0, old_root).fit('R1', scope, '4', 'inner-01', train, evaluate, .5)
+
+
+def test_second_sigint_during_cleanup_does_not_orphan_worker(tmp_path: Path) -> None:
+    import os
+    import signal
+    import time
+
+    pid_path, marker = tmp_path / 'child.pid', tmp_path / 'cleanup.started'
+    child_code = f"import os,time;from pathlib import Path;Path({str(pid_path)!r}).write_text(str(os.getpid()));time.sleep(30)"
+    parent_code = f'''import subprocess,time
+from pathlib import Path
+from histology_data.image_classification_r0_r3 import _bounded
+original=subprocess.Popen
+class Observed(original):
+ def poll(self):
+  Path({str(marker)!r}).write_text('cleanup')
+  time.sleep(.3)
+  return super().poll()
+subprocess.Popen=Observed
+_bounded([{sys.executable!r},'-c',{child_code!r}],60,Path({str(tmp_path / 'child.log')!r}))
+'''
+    with (tmp_path / 'parent.log').open('w') as log:
+        parent = subprocess.Popen([sys.executable, '-c', parent_code], stdout=log, stderr=log, start_new_session=True)
+        child_pid = None
+        try:
+            deadline = time.monotonic() + 10
+            while not pid_path.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert pid_path.exists()
+            child_pid = int(pid_path.read_text())
+            parent.send_signal(signal.SIGINT)
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert marker.exists()
+            parent.send_signal(signal.SIGINT)
+            parent.wait(timeout=10)
+            assert not Path(f'/proc/{child_pid}/cmdline').exists(), 'Interrupted cleanup orphaned the real worker'
+        finally:
+            if child_pid is not None:
+                try:os.kill(child_pid, signal.SIGTERM)
+                except ProcessLookupError:pass
+            if parent.poll() is None:
+                parent.terminate()
+                parent.wait(timeout=5)

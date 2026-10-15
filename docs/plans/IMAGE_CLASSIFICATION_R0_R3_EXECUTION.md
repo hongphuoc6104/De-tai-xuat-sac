@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.2** · trạng thái **v3 lưu 121 fit; kiểm thử conditioning tương đương objective và tái sử dụng L-BFGS trước khi tiếp tục**.
+Ngày: **16/10/2026** · phiên bản **1.3** · trạng thái **v3 lưu121fit; pilot conditioning phổ quát dừng do chậm; kiểm thử conditioning dự phòng trước khi tiếp tục**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -242,3 +242,13 @@ Chỉ SAGA dùng weighted centering z′=z−μ với μ tính trên train, và 
 Tái hiện đúng scope trên Colab: conditioning hội tụ3809iterations/120,84giây, khôngwarning; maxvalidation score delta5,07e−6, relativeobjective delta1,45e−11 so với R2 L-BFGS. Không dùng outer labels/metrics để chọn sửa. Lần chạy conditioning có scientific identity riêng.
 
 Được nhập lại108fit R1/R2 từ v3 chỉ khi implementation nằm allowlist đã review, source/versions/config/actual splits/core hashes khớp, source không lock và từng unit đúng binding/checksum. Copy nguyên payload/commit, ghi provenance vào reused_units.json và report commit; tuyệt đối không nhập fit SAGA cũ. Kết quả v2/v3partial giữ nguyên để audit. Sau đó chạy lại SAGA-control/R3 và nghiệm thu cùng gate đã khóa.
+
+## 15. Conditioning dự phòng — không áp dụng mù quáng
+
+Pilot conditioning phổ quát R3/fold01/inner01/lambda0,05/ratio0,7 chạy hơn600giây vẫn chưa hoàn tất; cùng scope bản unconditioned đã hội tụ1809iterations/63,68giây. Worker đang dùng CPU thật, RSS khoảng260MB; không phải treo Drive. Pilot dừng có kiểm soát, giữ checkpoint; không xem outer quality metrics để chọn sửa.
+
+Mỗi fit SAGA thử unconditioned ở giới hạn đầu2000iterations. Nếu hội tụ, chấp nhận ngay. Nếu có ConvergenceWarning, lượt sau dùng weighted centering/bound ở10000 rồi50000iterations; deadline toànfit900giây giữ nguyên. Mọi lượt cùng logical weights/C/objective; luôn kiểm control gate, không chấp nhận mô hình chưa hội tụ. Receipt ghi conditioning riêng từng attempt và trạng thái thực tế của mô hình cuối. Đây là chiến lược numerical fallback, không đổi ma trận R0–R3 hoặc tiêu chí chọn mô hình.
+
+Operator tạo subprocess trong process group riêng. Khi người dùng/điều phối ngắt notebook, dừng parent có kiểm soát, rồi TERM đúng group công việc nếu cần; xác minh không còn worker trước lần chạy khác. Không ngắt hoặc dừng workload khác.
+
+Cleanup runner tạm bỏ qua SIGINT lặp lại trong finally, TERM/reap worker rồi khôi phục handler. Bài E2E tiến trình thật tái hiện chính xác hai SIGINT đã fail trước sửa và pass sau sửa; lỗi này được kiểm hồi quy riêng.

@@ -28,3 +28,6 @@ Updated verification:499local tests passed,1optional skipped;423active-assertion
 
 ## Conditioning follow-up
 V3 preserved121fits before a900s SAGA-control timeout. Same-scope Colab E2E validates objective-preserving weighted centering/curvature conditioning:3809iterations/120.84s, no warnings, score delta5.07e−6, objective delta1.45e−11. Conditioning receipt records logical and solver parameters; new study identity and strict R1/R2-only cache import preserve108verified L-BFGS fits. No outer labels/metrics used to design the fix. Full validation/CI required before deployment.
+
+## Adaptive conditioning follow-up
+Universal conditioning slowed the known easy pilot beyond600s (activeCPU, RSS260MB) versus63.68s for the unconditioned fit. Pilot stopped safely; no outer metrics used. Solver now tries the unconditioned first iteration budget and conditions only nonconverged retries, retaining objective and gates. Operator must isolate process group and verify no grandchildren after interrupt. New source identity/test evidence/CI must be bound before the next attempt.
