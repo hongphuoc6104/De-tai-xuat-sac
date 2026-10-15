@@ -25,12 +25,17 @@ from typing import Any
 
 import numpy as np
 
-from . import image_classification as core, image_classification_lab as lab, image_classification_studies as legacy
+from . import (
+    image_classification as core,
+    image_classification_batch_optimizer as batch_optimizer,
+    image_classification_lab as lab,
+    image_classification_studies as legacy,
+)
 from .io import atomic_json, file_hash, fingerprint
 
 PROTOCOL = "original-image-retccl-head-ablation-v3-float64"
 WORKER_MODULE = "histology_data.image_classification_r0_r3"
-ARMS = ("R1", "R2", "R2_SAGA_CONTROL", "R3")
+ARMS = ("R1", "R2", "R2_SOLVER_CONTROL", "R3")
 REUSABLE_LBFGS_IMPLEMENTATIONS = {"77c5dbf242b3c1f5bfce4f04b67db2f426489e84ff38bd2816481b5ac87338cd"}
 
 
@@ -280,10 +285,12 @@ def _worker(folder: Path) -> int:
         steps.append(("normalizer", Normalizer(norm="l2")))
     steps.append(("scaler", StandardScaler()))
     preprocessing = Pipeline(steps)
-    # Preserve the exact preprocessing values, but optimize both solvers in
-    # double precision. SAGA otherwise inherits float32 from the feature cache.
+    # Preserve exact preprocessing values, with double-precision optimization.
+    # The legacy SAGA branch below remains only for archived E2E reproductions.
     z = np.asarray(preprocessing.fit_transform(x), dtype=np.float64, order="C")
     ze = np.asarray(preprocessing.transform(evaluate), dtype=np.float64, order="C")
+    if request.get("optimizer") == batch_optimizer.BACKEND:
+        return _certified_worker(folder, request, preprocessing, z, ze, y, weights)
     saga = request["arm"] in {"R3", "R2_SAGA_CONTROL"}
     logical_c = 1 / (request["lambda"] * float(weights.sum()))
     offset = np.zeros(z.shape[1], dtype=np.float64)
@@ -354,6 +361,37 @@ def _worker(folder: Path) -> int:
     return 0
 
 
+def _certified_worker(folder: Path, request: dict[str, Any], preprocessing: Any,
+                      z: np.ndarray, ze: np.ndarray, y: np.ndarray, weights: np.ndarray) -> int:
+    """Publish only a named full-batch estimator with independent convergence proof."""
+    import joblib
+    from sklearn.pipeline import Pipeline
+
+    if (request.get("optimizer_sha256") != file_hash(Path(batch_optimizer.__file__))
+            or request.get("gap_tolerance") != batch_optimizer.GAP_TOLERANCE
+            or request.get("kkt_tolerance") != batch_optimizer.KKT_TOLERANCE):
+        raise ValueError("Certified optimizer identity/tolerances differ from the request.")
+    model = batch_optimizer.CertifiedElasticNetClassifier(request["lambda"], request["ratio"],
+                                                         max_iter=request["iterations"][0], tol=request["tol"])
+    try:
+        model.fit(z, y, sample_weight=weights)
+    except RuntimeError:
+        atomic_json(folder / "fit_receipt.json", model.fit_receipt_)
+        return 2
+    receipt = dict(model.fit_receipt_, objective=model.fit_receipt_["certificate"]["primal"],
+                   nonzero_coefficients=int(np.count_nonzero(model.coef_)), weight_sum=float(weights.sum()),
+                   C=float(model.C), scaler_fit_rows=len(z), conditioning=False, solver_weight_divisor=1.0)
+    import resource
+    receipt["max_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1024 if sys.platform != "darwin" else 1)
+    atomic_json(folder / "fit_receipt.json", receipt)
+    prediction, train_prediction = model.predict_proba(ze)[:, 1], model.predict_proba(z)[:, 1]
+    if not np.isfinite(prediction).all():
+        return 2
+    joblib.dump(Pipeline([*preprocessing.steps, ("classifier", model)]), folder / "model.joblib")
+    np.savez(folder / "predictions.npz", evaluate=prediction, train=train_prediction)
+    return 0
+
+
 class Runner:
     """Serial fit dispatcher with immutable, verifiable resume units."""
 
@@ -370,13 +408,16 @@ class Runner:
         request = {"arm": arm, "lambda": penalty, "ratio": ratio,
                    "iterations": list(self.config.iterations), "seed": self.config.seed,
                    "fit_dtype": "float64",
-                   "tol": self.config.saga_tol if arm in {"R3", "R2_SAGA_CONTROL"}
+                   "tol": self.config.saga_tol if arm in {"R3", "R2_SOLVER_CONTROL"}
                    else self.config.normalized_lbfgs_tol if arm == "R2" else self.config.lbfgs_tol}
         request["lambda"], request["ratio"] = float(penalty), float(ratio)
-        if arm in {"R3", "R2_SAGA_CONTROL"}:
-            request["condition_saga"] = self.config.condition_saga
-            request["saga_strategy"] = "warm-normal-retries-final-weighted-bound"
-            request["warm_start"] = True
+        if arm in {"R3", "R2_SOLVER_CONTROL"}:
+            request["iterations"] = [self.config.iterations[0]]
+            request["tol"] = 1e-9
+            request["optimizer"] = batch_optimizer.BACKEND
+            request["optimizer_sha256"] = file_hash(Path(batch_optimizer.__file__))
+            request["gap_tolerance"] = batch_optimizer.GAP_TOLERANCE
+            request["kkt_tolerance"] = batch_optimizer.KKT_TOLERANCE
         binding = {"request": request, "scope": scope, "head": head, "split": split,
                    "train_ids": [self.source.rows[i]["image_id"] for i in train],
                    "evaluation_ids": [self.source.rows[i]["image_id"] for i in evaluate],
@@ -482,7 +523,7 @@ def _run_head(runner: Runner, arm: str, name: str, train: np.ndarray, test: np.n
                 vi = _restrict(source, source.positions(split["validation_image_ids"]), head)
                 prediction, receipt, path = runner.fit(arm, name, head, f"inner-{split['split']:02d}", ti, vi, penalty, ratio)
                 scores[vi] = prediction
-                if arm == "R2_SAGA_CONTROL":
+                if arm == "R2_SOLVER_CONTROL":
                     reference, old, old_path = runner.fit("R2", name, head, f"inner-{split['split']:02d}", ti, vi, penalty)
                     with np.load(path / "predictions.npz") as a, np.load(old_path / "predictions.npz") as b:
                         delta = max(float(np.max(np.abs(a[k] - b[k]))) for k in ("train", "evaluate"))
@@ -493,7 +534,7 @@ def _run_head(runner: Runner, arm: str, name: str, train: np.ndarray, test: np.n
                     control_checks.append(check)
                     if not check["passed"] or reference.shape != prediction.shape:
                         atomic_json(runner.root / "solver_control_failure.json", check)
-                        raise RuntimeError("SAGA L2 control differs from R2; R3 interpretation blocked.")
+                        raise RuntimeError("Certified full-batch L2 control differs from R2; R3 interpretation blocked.")
             if not np.isfinite(scores[train]).all():
                 raise ValueError("Incomplete inner OOF coverage.")
             threshold, bacc = core._choose_threshold(y[train], scores[train])
@@ -501,7 +542,7 @@ def _run_head(runner: Runner, arm: str, name: str, train: np.ndarray, test: np.n
                                "threshold": threshold, "balanced_accuracy": bacc})
     chosen = dependency["selected"] if dependency is not None else _selection(candidates)
     prediction, receipt, model_root = runner.fit(arm, name, head, "refit", train, test, chosen["lambda"], chosen["ratio"])
-    if arm == "R2_SAGA_CONTROL":
+    if arm == "R2_SOLVER_CONTROL":
         old_prediction = np.asarray(dependency["probabilities"])
         check = {"scope": name, "refit_score_delta": float(np.max(np.abs(old_prediction - prediction))),
                  "relative_objective_delta": abs(receipt["objective"] - dependency["fit_receipt"]["objective"]) / max(1, abs(dependency["fit_receipt"]["objective"]))}
@@ -509,7 +550,7 @@ def _run_head(runner: Runner, arm: str, name: str, train: np.ndarray, test: np.n
         control_checks.append(check)
         if not check["passed"]:
             atomic_json(runner.root / "solver_control_failure.json", check)
-            raise RuntimeError("SAGA L2 refit control failed.")
+            raise RuntimeError("Certified full-batch L2 refit control failed.")
     result = {"selected": chosen, "candidates": candidates, "test_image_ids": [source.rows[i]["image_id"] for i in test],
               "probabilities": prediction.tolist(), "fit_receipt": receipt,
               "model_root": str(model_root.relative_to(runner.root)), "control_checks": control_checks}
@@ -628,7 +669,7 @@ def _write_report(folder: Path, report: dict[str, Any]) -> list[str]:
     lines += ["", f"Phương án ưu tiên theo gate đã khóa: **{report['selected_for_followup']}**.", "",
               "Ngưỡng inner validation được lưu riêng từng fold/head; không chỉnh bằng outer labels.",
               "CI trong comparison.json lấy mẫu người bệnh từ OOF đã lưu, không refit; không bao quát toàn bộ bất định lựa chọn mô hình.",
-              "R0 và features giữ nguyên. R2_SAGA_CONTROL chỉ kiểm tương đương số học, không là mô hình chính để chọn.",
+              "R0 và features giữ nguyên. R2_SOLVER_CONTROL chỉ kiểm tương đương số học, không là mô hình chính để chọn.",
               "Score logistic chưa được xác minh là xác suất nguy cơ lâm sàng đã hiệu chuẩn.", "",
               "Xem comparison.json, solver_control.json, fit_summary và CSV riêng tư để truy vết."]
     (folder / "BAO_CAO.md").write_text("\n".join(lines) + "\n")
@@ -663,6 +704,8 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
                   "versions": {k: importlib.metadata.version(k) for k in ("numpy", "scipy", "scikit-learn")},
                   "baseline_inner_sha256": fingerprint([s[3] for s in scopes(source)]),
                   "implementation_sha256": file_hash(Path(__file__)),
+                  "optimizer": batch_optimizer.BACKEND,
+                  "optimizer_sha256": file_hash(Path(batch_optimizer.__file__)),
                   "legacy_core_sha256": file_hash(Path(core.__file__)),
                   "legacy_studies_sha256": file_hash(Path(legacy.__file__))}
     if reuse_lbfgs_root is not None:
@@ -705,13 +748,13 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
                                         min(config.lambdas), ratio)
                 pilots[arm] = pilot
             k, ratios = len(config.lambdas), len(config.ratios)
-            lbfgs_fits, saga_fits = 12 * (2 * k + 1), 3 * (2 * k + 1) + 3 * (2 * k * ratios + 1)
+            lbfgs_fits, batch_fits = 12 * (2 * k + 1), 3 * (2 * k + 1) + 3 * (2 * k * ratios + 1)
             if refit:
                 lbfgs_fits += 4 * (2 * k + 1)
-                saga_fits += (2 * k + 1) + (2 * k * ratios + 1)
-            estimated = 1.5 * (lbfgs_fits * pilots["R2"]["wall_seconds"] + saga_fits * pilots["R3"]["wall_seconds"])
+                batch_fits += (2 * k + 1) + (2 * k * ratios + 1)
+            estimated = 1.5 * (lbfgs_fits * pilots["R2"]["wall_seconds"] + batch_fits * pilots["R3"]["wall_seconds"])
             atomic_json(root / "resource_benchmark.json", {"pilot_committed": True, "pilots": pilots,
-                        "unique_fits_expected": lbfgs_fits + saga_fits,
+                        "unique_fits_expected": lbfgs_fits + batch_fits,
                         "conservative_estimated_fit_seconds": estimated,
                         "reserve_seconds": config.reserve_minutes * 60,
                         "note": "Estimate extrapolates scope/solver pilots; hard per-unit deadlines still apply."})
@@ -722,7 +765,7 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
                         continue
                     results[name] = {}
                     for head in (("4", "10", "40") if arm == "R1" else ("all",)):
-                        dependency = all_results["R2"][name][head] if arm == "R2_SAGA_CONTROL" else None
+                        dependency = all_results["R2"][name][head] if arm == "R2_SOLVER_CONTROL" else None
                         results[name][head] = _run_head(runner, arm, name, train, test, inner, head, dependency)
                     atomic_json(root / "status.json", {**status, "arm": arm, "scope": name, "new_fits": runner.new_fits})
                 all_results[arm] = results
@@ -763,7 +806,7 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
                 files.append(name)
             atomic_json(report_root / "comparison.json", report)
             atomic_json(report_root / "solver_control.json", {scope: result["all"]["control_checks"]
-                        for scope, result in all_results["R2_SAGA_CONTROL"].items()})
+                        for scope, result in all_results["R2_SOLVER_CONTROL"].items()})
             atomic_json(report_root / "gate_decision.json", {"priority_only": True,
                         "gates": report["gates"], "selected": report["selected_for_followup"]})
             files.extend(_write_report(report_root, report))
@@ -804,7 +847,9 @@ def predict_vector(root: Path, arm: str, vector: np.ndarray, objective_lens: int
     import joblib
 
     descriptor = json.loads((root / "config.json").read_text())
-    if descriptor["protocol"] != PROTOCOL or fingerprint(descriptor) != root.name:
+    if (descriptor["protocol"] != PROTOCOL or fingerprint(descriptor) != root.name
+            or descriptor.get("optimizer") != batch_optimizer.BACKEND
+            or descriptor.get("optimizer_sha256") != file_hash(Path(batch_optimizer.__file__))):
         raise ValueError("Deployment protocol identity mismatch.")
     if not _verify(root / "report", {"descriptor": descriptor}):
         raise ValueError("Deployment requires a complete report.")

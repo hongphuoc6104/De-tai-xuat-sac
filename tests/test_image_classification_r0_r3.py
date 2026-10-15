@@ -187,13 +187,17 @@ def test_normalized_solvers_use_high_accuracy_and_double_precision(tmp_path: Pat
     rows = [{"image_id": str(i), "patient_id": str(i // 2), "objective_lens": 4, "image_target": i % 2} for i in range(64)]
     runner = ablation.Runner(ablation.Source(x, rows, {}, [], {}), tmp_path, ablation.Config())
     predictions = []
-    for arm in ("R2", "R2_SAGA_CONTROL"):
+    for arm in ("R2", "R2_SOLVER_CONTROL"):
         p, receipt, path = runner.fit(arm, "numeric_fixture", "all", "inner-01", np.arange(48), np.arange(48, 64), .5)
         model = joblib.load(path / "model.joblib")
         assert model[-1].coef_.dtype == np.float64
         assert model[-1].tol <= 1e-8
         assert not receipt["conditioning"]
         assert receipt["solver_weight_divisor"] == 1
+        if arm == "R2_SOLVER_CONTROL":
+            request = json.loads((path / "commit.json").read_text())["binding"]["request"]
+            assert request["iterations"] == [2000] and receipt["options"]["maxiter"] == 2000
+            assert request["tol"] == receipt["options"]["gtol"] == 1e-9
         predictions.append(p)
     assert np.max(np.abs(predictions[0] - predictions[1])) < 1e-3
 

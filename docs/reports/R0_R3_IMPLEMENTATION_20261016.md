@@ -2,7 +2,7 @@
 
 CPU-only implementation of [the current plan](../plans/IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md), in `histology_data/image_classification_r0_r3.py`. It reads the completed B1 release/study without writes, replays its actual outer/inner records, and publishes a separate v2 namespace.
 
-R1 uses lens-restricted shared inner assignments. R2 adds sample L2 normalization before the train-only scaler. R3 jointly tunes lambda/ElasticNet ratio, with a separate SAGA-L2 numerical control. Patient-class weights, inner-only thresholds, deterministic ties and baseline provenance remain explicit. Models, validation predictions and receipts commit per fit; completed reports verify their full fit graph before reuse or deployment.
+R1 uses lens-restricted shared inner assignments. R2 adds sample L2 normalization before the train-only scaler. R3 jointly tunes lambda/ElasticNet ratio, with a separate certified full-batch L2 numerical control. Patient-class weights, inner-only thresholds, deterministic ties and baseline provenance remain explicit. Models, validation predictions and receipts commit per fit; completed reports verify their full fit graph before reuse or deployment.
 
 Each fit has a cancellable worker with a 900-second total cap across iteration retries and a 20-minute session reserve. Two timeouts on the same unit require attention. Failed/nonconverged fits never contribute to results. Synthetic producer→CLI→partial→resume→refit→save/load→tamper tests cover the real paths; clinical data is not trained locally.
 
@@ -14,7 +14,7 @@ python -m histology_data.image_classification_r0_r3 \
   --max-new-fits 2
 ```
 
-The two-fit cap is the technical L-BFGS/SAGA pilot. Remove it to resume the same scientific study. `--refit` additionally publishes full-data models; they do not supply an independent performance estimate. Required Python packages: pinned scikit-learn 1.8.0, NumPy/SciPy/Pillow/joblib and Matplotlib; the Colab preparation receipt records exact installed versions.
+The two-fit cap is the technical L-BFGS/full-batch pilot. Remove it to resume the same scientific study. `--refit` additionally publishes full-data models; they do not supply an independent performance estimate. Required Python packages: pinned scikit-learn 1.8.0, NumPy/SciPy/Pillow/joblib and Matplotlib; the Colab preparation receipt records exact installed versions.
 
 This document records implementation, not completion of real-data experiments. Production results and runtime/Drive receipts belong in the private execution directory. No GPU, encoder extraction, source ZIP staging, patch labels or shutdown of the local machine is part of this run.
 
@@ -34,3 +34,8 @@ Universal conditioning slowed the known easy pilot beyond600s (activeCPU, RSS260
 
 ## Warm retry follow-up
 V5 preserved115fits after a900s weak-control timeout. Numerical E2E now keeps SAGA iterates between normal2000/10000 retries and reserves conditioning for the final50000 retry. Intercept offsetdelta preserves logits, C×weights preserves objective. CLI worker continuity test failedbefore/passedafter. Colab inner-only weak scope:176.72s/2000+4608iterations, validationdelta8.18e−6/objectivedelta3.84e−12; difficult scope validation remains required before production. No quality gate/folds/grids/labels/tolerance relaxed.
+
+
+### Certified full-batch numerical amendment
+
+V6 preserved126fits after an outer2-control900s deadline. R3/control now use a named float64 split-variable L-BFGS-B estimator for the identical weighted logistic ElasticNet objective. Independent Fenchel primal-dual gap≤1e−10, original-coordinate KKT≤1e−6, split-surplus excess≤1e−10 and optimizer success are required. Dual equality roundoff receives an explicit intercept-bound correction. R2_SOLVER_CONTROL retains score/objective gates1e−3/1e−4. Model/optimizer source hashes, options and certificates are committed; only unchanged R1/R2 fits can be imported. Synthetic tests cover2048correlated dimensions/extremeweights/allgrid/zero/saturation/serialization/failedrefit. Actual Colab numerical-only control:27matched L2 fits +8hard-inner ElasticNet checks passed in10.30seconds, maximum score difference2.84e−6; no outer quality used. Production still requires full regression and CI.

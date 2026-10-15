@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.4** · trạng thái **v5 giữ115fit sau timeout; warm retry với conditioning ở lượt cuối đã qua scope yếu, đang kiểm hồi quy và scope khó**.
+Ngày: **16/10/2026** · phiên bản **1.5** · trạng thái **v6 giữ126fit sau timeout; bổ sung backend full-batch có chứng nhận hội tụ, đang kiểm hồi quy trước production**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -30,9 +30,9 @@ Nguồn công khai trong repo: [kết quả frozen đã hoàn tất](../reports/
 | **R0** | B1 hiện có: raw RetCCL512 → StandardScaler → global L2 LR | Mốc bất biến | Không thay; đọc model/OOF/commit đã lưu | Không |
 | **R1** | Cùng cache; ba scaler + L2 LR riêng cho 4×/10×/40× | R0 | Routing; từng head có tuning/ngưỡng riêng | Không |
 | **R2** | SampleL2Normalizer → StandardScaler → global L2 LR | R0 | Bỏ độ lớn vector trước khi fit scaler | Không |
-| **R3** | Cùng preprocessing R2 → global ElasticNet LR/SAGA | R2 và solver control | Penalty sparsity; chọn lambda và l1_ratio cùng nhau | Không |
+| **R3** | Cùng preprocessing R2 → global ElasticNet LR/full-batch | R2 và solver control | Penalty sparsity; chọn lambda và l1_ratio cùng nhau | Không |
 
-**Solver control bắt buộc, không là nhánh chính thứ năm:** `R2_SAGA_CONTROL` dùng preprocessing, weights và từng lambda giống R2, nhưng dùng solver SAGA với `l1_ratio=0`. Không chọn lambda riêng; outer refit dùng lambda R2 đã chọn. Chỉ diễn giải R3−R2 là ảnh hưởng của penalty sau khi control tương đương số học với R2.
+**Solver control bắt buộc, không là nhánh chính thứ năm:** `R2_SOLVER_CONTROL` dùng preprocessing, weights và từng lambda giống R2, nhưng dùng backend certified full-batch với `l1_ratio=0`. Không chọn lambda riêng; outer refit dùng lambda R2 đã chọn. Chỉ diễn giải R3−R2 là ảnh hưởng của penalty sau khi control tương đương số học với R2.
 
 R3 chỉ chọn trong `l1_ratio∈{0.3,0.7}`; ratio 0 thuộc control riêng. Không ép phải còn 50–100 hệ số, không gọi hệ số embedding là đặc trưng sinh học đã xác nhận. Nếu mọi hệ số bằng 0 nhưng đã hội tụ, đó là kết quả hợp lệ cần báo cáo.
 
@@ -93,10 +93,10 @@ L2 Normalizer → StandardScaler không giữ unit-norm ở đầu ra cuối. Ph
 
 ### 5.4. Hội tụ và solver control
 
-- R1 L-BFGS giữ `tol=1e−4` như B1. R2 L-BFGS dùng `tol=1e−8`; SAGA control/R3 dùng `tol=1e−8`. Sau preprocessing, cả hai solver nhận cùng ma trận float64; raw cache và hình học preprocessing giữ nguyên. Không sử dụng `n_jobs=-1` làm lời hứa tăng tốc SAGA.
-- Mỗi fit bắt đầu với max_iter 2.000; nếu chưa hội tụ, retry giới hạn 10.000 rồi 50.000, cùng dữ liệu/seed/objective. Ghi mọi attempt. Nếu vẫn lỗi hoặc hết budget: `attention_required`/`partial`, không bỏ candidate hoặc trả điểm như đã hội tụ.
+- R1 L-BFGS giữ `tol=1e−4` như B1; R2 L-BFGS `tol=1e−8`. R3/control dùng named estimator `certified-split-lbfgsb-v1`, float64, cùng ma trận preprocessing và objective, xem sửa đổi1.5 bên dưới.
+- R1/R2 giữ escalation2.000/10.000/50.000. Full-batch giới hạn2.000iterations, yêu cầu optimizer success, original-coordinate KKT≤1e−6, primal-dual gap≤1e−10 và split-surplus excess≤1e−10; không đạt thì lưu lỗi và không publish. Deadline900s giữ nguyên.
 - Lưu warnings, n_iter, thời gian, finite coefficients/scores và objective cho từng fit. Xác minh dtypes/precision nhất quán bằng fixture; đổi dtype phải vào descriptor, không âm thầm đổi khi resume.
-- Với cùng lambda/train/validation, control SAGA so với R2 L-BFGS: max chênh score ≤ 1e−3 và chênh relative objective ≤ 1e−4. Objective là weighted mean log loss + lambda/2 × ||w||², intercept không penalty; relative denominator = max(1, |objective R2|).
+- Với cùng lambda/train/validation, control full-batch so với R2 L-BFGS: max chênh score ≤ 1e−3 và chênh relative objective ≤ 1e−4. Objective là weighted mean log loss + lambda/2 × ||w||², intercept không penalty; relative denominator = max(1, |objective R2|).
 - Nếu control không đạt, không kết luận ElasticNet tốt/xấu do sparsity. Lưu lỗi số học và xử lý convergence/implementation, không thay tolerance theo outer AUROC. B1 R0 vẫn giữ nguyên.
 - Chạy từng fit trong worker có thể hủy và join; timeout toàn bộ worker của mỗi fit (gồm retry) = min(15 phút, thời gian còn lại trước hard deadline trừ reserve). Hết giờ thì dừng worker của job, không publish artifact dở; parent lưu receipt và cleanup. Không chỉ kiểm deadline trước khi gọi một fit SAGA dài. Nếu cùng đơn vị timeout hai lần, đánh dấu attention_required thay vì retry vô hạn.
 
@@ -106,9 +106,9 @@ L2 Normalizer → StandardScaler không giữ unit-norm ở đầu ra cuối. Ph
 flowchart TD
  A["P0: khóa protocol và identities"] --> B["P1: phát triển, fixture nhỏ local, conveyor/CI"]
  B --> C["P2: một Colab CPU, mount, verify cache và R0"]
- C --> D["P3: preflight support, pilot L-BFGS và SAGA"]
+ C --> D["P3: preflight support, pilot L-BFGS và full-batch"]
  D --> E["P4: R1 riêng lens và R2 normalization"]
- E --> F["P5: SAGA L2 control tương đương R2?"]
+ E --> F["P5: Full-batch L2 control tương đương R2?"]
  F -- "Không" --> G["attention_required; giữ artifacts; không diễn giải R3"]
  F -- "Có" --> H["P6: R3 ElasticNet"]
  H --> I["P7: report OOF và gate ưu tiên"]
@@ -121,7 +121,7 @@ flowchart TD
 | **P0 Thiết kế** | Kế hoạch này, baseline identities, existing artifacts | Protocol snapshot, registry R0–R3/control, hash config/source | Không còn tham số/mapping tùy chọn mơ hồ; chưa chạy data |
 | **P1 Phát triển** | Existing study runner, loaders, small synthetic fixtures | Versioned config/schema; shared-inner routing; Normalizer/ElasticNet/control; resume/report support; test proof và CI | G1 phần mềm đạt trước khi chạy dữ liệu thật |
 | **P2 Kết nối/nguồn** | Một CPU trên profile người dùng đã chọn và cache B1 trên Drive; người dùng hoàn tất Google khi cần | Runtime receipt private; R0 receipt; cache/source/OOF verification; memory estimate | G0 integrity đạt; không có writer khác cùng study |
-| **P3 Preflight/pilot** | Shared assignments và cả 3 lens; pilot L-BFGS R2 và SAGA R3 trên inner split đầu outer1, lambda 0,05, R3 ratio 0,7 | support.json; resource_benchmark.json; dự toán riêng theo solver/scope; commit fit pilot nếu đúng identity | Hai lớp, không overlap; budget đủ cho đơn vị tiếp theo |
+| **P3 Preflight/pilot** | Shared assignments và cả 3 lens; pilot L-BFGS R2 và full-batch R3 trên inner split đầu outer1, lambda 0,05, R3 ratio 0,7 | support.json; resource_benchmark.json; dự toán riêng theo solver/scope; commit fit pilot nếu đúng identity | Hai lớp, không overlap; budget đủ cho đơn vị tiếp theo |
 | **P4 R1/R2** | Raw cache; đúng partition và weights | Per-candidate inner OOF; selection; model + scaler; outer predictions; fit receipts | Từng fit hội tụ và checksum hợp lệ; đủ coverage |
 | **P5 Control** | R2 transforms, từng lambda, cùng scope và selection | solver_control.json; prediction/objective deltas; failure receipts | Control đạt tolerance trước khi diễn giải R3 |
 | **P6 R3** | R2 preprocessing; joint grid 8 candidates | Như P4 + ratio, sparsity và convergence | Không chọn số chiều bằng outer test; không bỏ candidate |
@@ -262,3 +262,14 @@ Bản mới dùng SAGA warm_start trong cùng một fit: 2000 rồi10000 uncondi
 Bài E2E worker thật fail trước sửa vì retry tạo model mới; pass sau sửa, kiểm trực tiếp prediction continuity và C×weight qua cả ba lượt. Chẩn đoán inner trên Colab cho scope vừa timeout:2000+4608iterations,176,72giây, khôngwarning ở lượt cuối; maxvalidationdelta8,18e−6, traindelta1,98e−6, objective delta3,84e−12, đạt control gate cũ. Không dùng outer metrics. Scope khó fold02/inner02/lambda5 tiếp tục được kiểm tra riêng trước full production.
 
 Mỗi attempt ghi initialization zero/previous_attempt, conditioning có dùng hay không, iterations và convergence; request/source hash phân biệt recipe mới. Các study partial cũ giữ nguyên, không nhập SAGA khác recipe. Deadline900s/tol1e−8,scoregate1e−3/objectivegate1e−4,folds/labels/grids/weights không đổi.
+
+
+## Sửa đổi1.5 — backend full-batch cho cùng bài toán ElasticNet
+
+V6 đã hoàn tất126/186fit trước khi control outer2 refit vượt900s. Warm-start/conditioning giúp các inner scope hội tụ nhưng chưa giải quyết chi phí quét lặp của SAGA với2048chiều và trọng số patient-class lớn. Không dùng outer AUROC/AP để thiết kế sửa đổi.
+
+R3 vẫn tối ưu đúng weighted mean logistic loss +λ(1−r)||β||²/2+λr||β||1, intercept không phạt. Backend full-batch mới dùng β=u−v,u/v≥0 và SciPy L-BFGS-B; không phải SAGA nên control đổi tên thành R2_SOLVER_CONTROL. Estimator có class/joblib riêng, source hash và backend identity riêng; không trộn SAGA fit cũ vào study mới. Chỉ108R1/R2byte-identical được nhập từ studyv3 theo checksum/binding cũ. Không sửa R0,folds,weights,grids,selection,threshold hoặc quality gate.
+
+Chứng nhận hội tụ độc lập dùng Fenchel dual của weighted logistic +ElasticNet, với μ=λ(1−r)>0. Giải intercept theo score equation; cân bằng dual residual mass trong domain. Báo cáo primal, dual, gap, KKT, split surplus, equality/domain residual, phiên bản SciPy và optimizer options. Sai số equality được trừ khỏi dual lower bound bằng chặn intercept tối ưu; ghi rõ allowance số học float64, không coi status success đơn thuần là bằng chứng. Các tolerance model/score/objective đã khóa không nới.
+
+Tiền kiểm Colab chỉ dùng train/inner numeric scores/objectives:27control scope và8ElasticNet candidates trên inner scope khó; không tính outer quality. Chỉ triển khai sau real-worker E2E, dữ liệu giả2048chiều/correlated/extremeweights/constant/saturation/allgrid, fresh-process serialize, toàn bộ conveyor/CI. Fit thất bại không được giữ lại tham số cũ để suy luận. Mọi study partial trước giữ nguyên để kiểm toán.
