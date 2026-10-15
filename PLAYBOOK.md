@@ -172,3 +172,7 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261015-02] Manifest có thể thuộc feature release chưa hoàn tất; phân biệt cache resumable và complete bằng verifier: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
 - [ERR-20261015-03] DriveFS credential HTTP404 trên T4 còn sống và kiểm chứng mount trong kernel CLI: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261015-04] Contents API503 trong lúc encoder vẫn sống, backoff và lọc proxy query: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261015-05] Schema CSV và numerical equivalence trong đối chiếu OOF: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
