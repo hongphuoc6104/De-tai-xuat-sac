@@ -319,3 +319,42 @@ _bounded([{sys.executable!r},'-c',{child_code!r}],60,Path({str(tmp_path / 'child
             if parent.poll() is None:
                 parent.terminate()
                 parent.wait(timeout=5)
+
+
+def test_retry_preserves_predictions_when_coordinates_and_weights_change(tmp_path: Path) -> None:
+    rng = np.random.default_rng(812)
+    x = (rng.normal(size=(48, 9)) + 2).astype(np.float32)
+    weights = np.ones(48)
+    weights[0] = 32
+    folder = tmp_path / 'warm-worker'
+    folder.mkdir()
+    (folder / 'request.json').write_text(json.dumps({'arm': 'R2_SAGA_CONTROL', 'lambda': .5, 'ratio': 0,
+        'iterations': [1, 2, 10000], 'tol': 1e-8, 'seed': 17, 'condition_saga': True}))
+    np.savez(folder / 'input.npz', x=x, y=np.arange(48) % 2, weights=weights, evaluate=x[32:])
+    trace = folder / 'continuity.json'
+    code = f'''import json,runpy,sys
+from pathlib import Path
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+original=LogisticRegression.fit
+previous={{}}
+marks=[]
+def observed(self,X,y,*args,**kwargs):
+ weights=np.asarray(kwargs['sample_weight'])
+ if previous:
+  assert hasattr(self,'coef_'), 'Retry discarded the previous real model'
+  assert np.max(np.abs(self.predict_proba(X)-previous['probabilities']))<1e-12, 'Coordinate translation changed predictions before fitting'
+  assert np.allclose(self.C*weights,previous['C_weight'],rtol=1e-12,atol=1e-12), 'Retry changed the logical objective'
+  marks.append('continuity-preserved')
+ result=original(self,X,y,*args,**kwargs)
+ previous.update(probabilities=self.predict_proba(X),C_weight=self.C*weights)
+ Path({str(trace)!r}).write_text(json.dumps(marks))
+ return result
+LogisticRegression.fit=observed
+sys.argv=[{ablation.WORKER_MODULE!r},'--worker',{str(folder)!r}]
+runpy.run_module({ablation.WORKER_MODULE!r},run_name='__main__',alter_sys=True)
+'''
+    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(trace.read_text()) == ['continuity-preserved', 'continuity-preserved']
+    assert json.loads((folder / 'fit_receipt.json').read_text())['converged']

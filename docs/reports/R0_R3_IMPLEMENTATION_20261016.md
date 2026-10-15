@@ -31,3 +31,6 @@ V3 preserved121fits before a900s SAGA-control timeout. Same-scope Colab E2E vali
 
 ## Adaptive conditioning follow-up
 Universal conditioning slowed the known easy pilot beyond600s (activeCPU, RSS260MB) versus63.68s for the unconditioned fit. Pilot stopped safely; no outer metrics used. Solver now tries the unconditioned first iteration budget and conditions only nonconverged retries, retaining objective and gates. Operator must isolate process group and verify no grandchildren after interrupt. New source identity/test evidence/CI must be bound before the next attempt.
+
+## Warm retry follow-up
+V5 preserved115fits after a900s weak-control timeout. Numerical E2E now keeps SAGA iterates between normal2000/10000 retries and reserves conditioning for the final50000 retry. Intercept offsetdelta preserves logits, C×weights preserves objective. CLI worker continuity test failedbefore/passedafter. Colab inner-only weak scope:176.72s/2000+4608iterations, validationdelta8.18e−6/objectivedelta3.84e−12; difficult scope validation remains required before production. No quality gate/folds/grids/labels/tolerance relaxed.

@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.3** · trạng thái **v3 lưu121fit; pilot conditioning phổ quát dừng do chậm; kiểm thử conditioning dự phòng trước khi tiếp tục**.
+Ngày: **16/10/2026** · phiên bản **1.4** · trạng thái **v5 giữ115fit sau timeout; warm retry với conditioning ở lượt cuối đã qua scope yếu, đang kiểm hồi quy và scope khó**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -252,3 +252,13 @@ Mỗi fit SAGA thử unconditioned ở giới hạn đầu2000iterations. Nếu 
 Operator tạo subprocess trong process group riêng. Khi người dùng/điều phối ngắt notebook, dừng parent có kiểm soát, rồi TERM đúng group công việc nếu cần; xác minh không còn worker trước lần chạy khác. Không ngắt hoặc dừng workload khác.
 
 Cleanup runner tạm bỏ qua SIGINT lặp lại trong finally, TERM/reap worker rồi khôi phục handler. Bài E2E tiến trình thật tái hiện chính xác hai SIGINT đã fail trước sửa và pass sau sửa; lỗi này được kiểm hồi quy riêng.
+
+## 16. Giữ hệ số giữa retry và conditioning ở lượt cuối
+
+V5 giữ115fit rồi timeout900s tại control fold01/inner01/lambda0,05. Scope này trước đây hội tụ khi chạy unconditioned2000(warning) rồi10000(actual6624), tổng231,66giây. Conditioning ngay retry thứ hai làm chậm scope vốn có thể hội tụ bằng cách thông thường; khởi tạo lại mỗi retry cũng bỏ tiến độ đã tính.
+
+Bản mới dùng SAGA warm_start trong cùng một fit: 2000 rồi10000 unconditioned, chỉ conditioning ở retry cuối50000 nếu vẫn chưa hội tụ. Giữ nguyên beta; khi đổi offset từμold sangμnew, đổi intercept bnew=bold+(μnew−μold)·beta trước fit, đảm bảo mọi logit không đổi tại thời điểm chuyển tọa độ. C×weights vẫn bất biến; khi lưu, khôi phục intercept về tọa độ scaler gốc. L-BFGS R1/R2 không đổi và được tái sử dụng theo hợp đồng checksum/binding cũ.
+
+Bài E2E worker thật fail trước sửa vì retry tạo model mới; pass sau sửa, kiểm trực tiếp prediction continuity và C×weight qua cả ba lượt. Chẩn đoán inner trên Colab cho scope vừa timeout:2000+4608iterations,176,72giây, khôngwarning ở lượt cuối; maxvalidationdelta8,18e−6, traindelta1,98e−6, objective delta3,84e−12, đạt control gate cũ. Không dùng outer metrics. Scope khó fold02/inner02/lambda5 tiếp tục được kiểm tra riêng trước full production.
+
+Mỗi attempt ghi initialization zero/previous_attempt, conditioning có dùng hay không, iterations và convergence; request/source hash phân biệt recipe mới. Các study partial cũ giữ nguyên, không nhập SAGA khác recipe. Deadline900s/tol1e−8,scoregate1e−3/objectivegate1e−4,folds/labels/grids/weights không đổi.

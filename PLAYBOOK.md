@@ -182,3 +182,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261016-07] Weighted SAGA conditioning giữ objective và nhập cache L-BFGS có provenance: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
 - [ERR-20261016-08..09] Universal conditioning latency và cleanup nhóm subprocess Colab khi interrupt: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-10] Retry SAGA giữ hệ số, bảo toàn logit khi đổi tọa độ và chỉ conditioning ở lượt cuối: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

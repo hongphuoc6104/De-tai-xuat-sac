@@ -289,11 +289,14 @@ def _worker(folder: Path) -> int:
     offset = np.zeros(z.shape[1], dtype=np.float64)
     weight_divisor = 1.0
     attempts = []
+    model = None
     start = time.monotonic()
     for attempt, limit in enumerate(request["iterations"]):
-        # A conservative weighted bound may be much slower on easy scopes.
-        # Try the original solver first; condition only a nonconverged retry.
-        conditioned = bool(saga and request.get("condition_saga", False) and attempt > 0)
+        # Keep ordinary retries fast. The conservative weighted bound is an
+        # emergency final retry, not a replacement for normal continuation.
+        previous_offset = offset
+        conditioned = bool(saga and request.get("condition_saga", False)
+                           and attempt > 0 and attempt == len(request["iterations"]) - 1)
         if conditioned:
             # Translation is absorbed by the unpenalized intercept. Scaling
             # all weights and compensating C preserves the logical objective.
@@ -302,14 +305,23 @@ def _worker(folder: Path) -> int:
             weight_divisor = max(1.0, float(np.max(weights * curvature) / np.max(curvature)))
         solver_z = z - offset
         solver_weights = weights / weight_divisor
-        model = LogisticRegression(C=logical_c * weight_divisor,
-                                   solver="saga" if saga else "lbfgs", l1_ratio=request["ratio"],
-                                   tol=request["tol"], random_state=request["seed"], max_iter=limit)
+        continuing = bool(saga and model is not None)
+        if continuing:
+            # Preserve every training logit before changing coordinates. C*w
+            # is unchanged, so the previous iterate solves the same objective.
+            model.intercept_ += (offset - previous_offset) @ model.coef_[0]
+            model.set_params(C=logical_c * weight_divisor, max_iter=limit)
+        else:
+            model = LogisticRegression(C=logical_c * weight_divisor,
+                                       solver="saga" if saga else "lbfgs", l1_ratio=request["ratio"],
+                                       tol=request["tol"], random_state=request["seed"], max_iter=limit,
+                                       warm_start=saga)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             model.fit(solver_z, y, sample_weight=solver_weights)
         converged = not any(issubclass(w.category, ConvergenceWarning) for w in caught)
         attempts.append({"max_iter": limit, "iterations": model.n_iter_.tolist(), "conditioning": conditioned,
+                         "initialization": "previous_attempt" if continuing else "zero",
                          "warnings": [str(w.message) for w in caught], "converged": converged})
         if converged:
             break
@@ -321,7 +333,7 @@ def _worker(folder: Path) -> int:
                "solver_weight_sum": float(solver_weights.sum()),
                "solver_center_l2_norm": float(np.linalg.norm(offset)),
                "conditioning": conditioned, "conditioning_requested": bool(request.get("condition_saga", False)),
-               "strategy": "unconditioned-first-then-weighted-bound" if saga else "lbfgs"}
+               "strategy": "warm-normal-retries-final-weighted-bound" if saga else "lbfgs"}
     import resource
     receipt["max_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1024 if sys.platform != "darwin" else 1)
     atomic_json(folder / "fit_receipt.json", receipt)
@@ -363,7 +375,8 @@ class Runner:
         request["lambda"], request["ratio"] = float(penalty), float(ratio)
         if arm in {"R3", "R2_SAGA_CONTROL"}:
             request["condition_saga"] = self.config.condition_saga
-            request["saga_strategy"] = "unconditioned-first-then-weighted-bound"
+            request["saga_strategy"] = "warm-normal-retries-final-weighted-bound"
+            request["warm_start"] = True
         binding = {"request": request, "scope": scope, "head": head, "split": split,
                    "train_ids": [self.source.rows[i]["image_id"] for i in train],
                    "evaluation_ids": [self.source.rows[i]["image_id"] for i in evaluate],
