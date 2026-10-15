@@ -1,6 +1,6 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.1** · trạng thái **lượt v2 đã dừng đúng gate số học; đang kiểm thử bản precision v3 trước khi chạy tiếp**.
+Ngày: **16/10/2026** · phiên bản **1.2** · trạng thái **v3 lưu 121 fit; kiểm thử conditioning tương đương objective và tái sử dụng L-BFGS trước khi tiếp tục**.
 
 Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
 
@@ -232,3 +232,13 @@ External test công khai như SICAPv2/TMA là hướng chuẩn bị riêng: audi
 Lượt v2 giữ114fit đã commit rồi dừng tại control lambda0,5/inner1: maxscore delta0,002045 >0,001. Dữ liệu và preprocessing giữa hai solver giống hệt (maxdifference0); L-BFGS gradient còn7,89e−5, SAGA float32 còn1,63e−5. Đối chứng cùng dữ liệu ở float64 và L-BFGS tolerance1e−8 hạ chênh validation còn0,000108, không dùng nhãn hoặc metric outer để chọn sửa.
 
 Bản v3 ghi precision/tolerances vào scientific identity mới; không nới score/objective gate, không đổi folds, weights, grids hay nhãn. R0 và cacheB1 tiếp tục bất biến. Lượt114fit cũ giữ nguyên để audit; không gộp điểm của hai phiên bản số học. Đây là sửa độ chính xác tối ưu hóa cùng objective, không là bằng chứng đã khắc phục overfitting.
+
+## 14. Conditioning SAGA và tái sử dụng fit L-BFGS ngày16/10
+
+V3 dừng an toàn sau121fit tại SAGA-control fold02/inner02/lambda5 vì vượt deadline900giây. Fold01 control đã đạt, maxscore delta2,10e−5. Đây là lỗi hội tụ/số học, chưa là kết luận chất lượng R3. Không thay tolerance gate, labels, folds hoặc grids.
+
+Chỉ SAGA dùng weighted centering z′=z−μ với μ tính trên train, và chia toàn bộ sample weights cho a=max(1,max(wᵢ(‖z′ᵢ‖²+1))/max(‖z′ᵢ‖²+1)); Csolver=C×a. Tích C×weight giữ nguyên; dịch intercept ngược b=b′−μ·β trước lưu model. Đây là tiền điều kiện tối ưu cùng objective, không thay preprocessing hay tăng độ chính xác bằng thiết kế. Receipt lưu logical/solver C, tổng weights, divisor, center norm, iterations và objective gốc.
+
+Tái hiện đúng scope trên Colab: conditioning hội tụ3809iterations/120,84giây, khôngwarning; maxvalidation score delta5,07e−6, relativeobjective delta1,45e−11 so với R2 L-BFGS. Không dùng outer labels/metrics để chọn sửa. Lần chạy conditioning có scientific identity riêng.
+
+Được nhập lại108fit R1/R2 từ v3 chỉ khi implementation nằm allowlist đã review, source/versions/config/actual splits/core hashes khớp, source không lock và từng unit đúng binding/checksum. Copy nguyên payload/commit, ghi provenance vào reused_units.json và report commit; tuyệt đối không nhập fit SAGA cũ. Kết quả v2/v3partial giữ nguyên để audit. Sau đó chạy lại SAGA-control/R3 và nghiệm thu cùng gate đã khóa.

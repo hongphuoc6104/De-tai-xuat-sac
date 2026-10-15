@@ -29,6 +29,7 @@ from .io import atomic_json, file_hash, fingerprint
 PROTOCOL = "original-image-retccl-head-ablation-v3-float64"
 WORKER_MODULE = "histology_data.image_classification_r0_r3"
 ARMS = ("R1", "R2", "R2_SAGA_CONTROL", "R3")
+REUSABLE_LBFGS_IMPLEMENTATIONS = {"77c5dbf242b3c1f5bfce4f04b67db2f426489e84ff38bd2816481b5ac87338cd"}
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class Config:
     lbfgs_tol: float = 1e-4
     normalized_lbfgs_tol: float = 1e-8
     saga_tol: float = 1e-8
+    condition_saga: bool = True
     score_tolerance: float = 1e-3
     objective_tolerance: float = 1e-4
     bootstrap_repeats: int = 2000
@@ -52,6 +54,8 @@ class Config:
 
     def validate(self) -> None:
         """Reject invalid grids before opening an output study."""
+        if type(self.condition_saga) is not bool:
+            raise ValueError("SAGA conditioning must be an explicit boolean.")
         for values in (self.lambdas, self.ratios, self.iterations):
             if not values or len(set(values)) != len(values):
                 raise ValueError("Grid values must be nonempty and unique.")
@@ -273,23 +277,40 @@ def _worker(folder: Path) -> int:
     z = np.asarray(preprocessing.fit_transform(x), dtype=np.float64, order="C")
     ze = np.asarray(preprocessing.transform(evaluate), dtype=np.float64, order="C")
     saga = request["arm"] in {"R3", "R2_SAGA_CONTROL"}
+    logical_c = 1 / (request["lambda"] * float(weights.sum()))
+    offset = np.zeros(z.shape[1], dtype=np.float64)
+    weight_divisor = 1.0
+    if saga and request.get("condition_saga", False):
+        # Translation is absorbed by the unpenalized intercept. Scaling all
+        # weights and compensating C leaves C*weight and the objective intact.
+        offset = np.average(z, axis=0, weights=weights)
+        centered = z - offset
+        curvature = np.square(centered).sum(axis=1) + 1.0
+        weight_divisor = max(1.0, float(np.max(weights * curvature) / np.max(curvature)))
+    solver_z = z - offset
+    solver_weights = weights / weight_divisor
     attempts = []
     start = time.monotonic()
     for limit in request["iterations"]:
-        model = LogisticRegression(C=1 / (request["lambda"] * float(weights.sum())),
+        model = LogisticRegression(C=logical_c * weight_divisor,
                                    solver="saga" if saga else "lbfgs", l1_ratio=request["ratio"],
                                    tol=request["tol"], random_state=request["seed"], max_iter=limit)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            model.fit(z, y, sample_weight=weights)
+            model.fit(solver_z, y, sample_weight=solver_weights)
         converged = not any(issubclass(w.category, ConvergenceWarning) for w in caught)
         attempts.append({"max_iter": limit, "iterations": model.n_iter_.tolist(),
                          "warnings": [str(w.message) for w in caught], "converged": converged})
         if converged:
             break
+    model.intercept_ -= offset @ model.coef_[0]
     receipt = {"attempts": attempts, "seconds": time.monotonic() - start,
                "converged": converged, "nonzero_coefficients": int(np.count_nonzero(model.coef_)),
-               "weight_sum": float(weights.sum()), "C": model.C, "scaler_fit_rows": len(x)}
+               "weight_sum": float(weights.sum()), "C": logical_c, "scaler_fit_rows": len(x),
+               "solver_C": model.C, "solver_weight_divisor": weight_divisor,
+               "solver_weight_sum": float(solver_weights.sum()),
+               "solver_center_l2_norm": float(np.linalg.norm(offset)),
+               "conditioning": bool(saga and request.get("condition_saga", False))}
     import resource
     receipt["max_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1024 if sys.platform != "darwin" else 1)
     atomic_json(folder / "fit_receipt.json", receipt)
@@ -313,10 +334,12 @@ def _worker(folder: Path) -> int:
 class Runner:
     """Serial fit dispatcher with immutable, verifiable resume units."""
 
-    def __init__(self, source: Source, root: Path, config: Config, max_new_fits: int | None = None):
+    def __init__(self, source: Source, root: Path, config: Config, max_new_fits: int | None = None,
+                 reuse_lbfgs_root: Path | None = None):
         self.source, self.root, self.config = source, root, config
         self.deadline = time.monotonic() + (config.budget_minutes - config.reserve_minutes) * 60
         self.max_new_fits, self.new_fits = max_new_fits, 0
+        self.reuse_lbfgs_root = reuse_lbfgs_root
 
     def fit(self, arm: str, scope: str, head: str, split: str, train: np.ndarray,
             evaluate: np.ndarray, penalty: float, ratio: float = 0) -> tuple[np.ndarray, dict[str, Any], Path]:
@@ -327,11 +350,31 @@ class Runner:
                    "tol": self.config.saga_tol if arm in {"R3", "R2_SAGA_CONTROL"}
                    else self.config.normalized_lbfgs_tol if arm == "R2" else self.config.lbfgs_tol}
         request["lambda"], request["ratio"] = float(penalty), float(ratio)
+        if arm in {"R3", "R2_SAGA_CONTROL"}:
+            request["condition_saga"] = self.config.condition_saga
         binding = {"request": request, "scope": scope, "head": head, "split": split,
                    "train_ids": [self.source.rows[i]["image_id"] for i in train],
                    "evaluation_ids": [self.source.rows[i]["image_id"] for i in evaluate],
                    "source": self.source.receipt, "protocol": PROTOCOL}
         target = self.root / "arms" / arm / scope / "heads" / head / split / fingerprint(request)
+        if not (target / "commit.json").exists() and arm in {"R1", "R2"} and self.reuse_lbfgs_root is not None:
+            previous = self.reuse_lbfgs_root / target.relative_to(self.root)
+            if _verify(previous, binding):
+                manifest = json.loads((previous / "commit.json").read_text())
+                if set(manifest["files"]) != {"model.joblib", "predictions.npz", "fit_receipt.json"}:
+                    raise ValueError("Reusable L-BFGS unit has an unexpected payload.")
+                target.mkdir(parents=True, exist_ok=True)
+                for name in [*manifest["files"], "commit.json"]:
+                    temporary = target / (name + ".partial")
+                    shutil.copyfile(previous / name, temporary)
+                    os.replace(temporary, target / name)
+                reuse_path = self.root / "reused_units.json"
+                reused = json.loads(reuse_path.read_text()) if reuse_path.exists() else {}
+                reused[str(target.relative_to(self.root))] = {"source_study": str(self.reuse_lbfgs_root),
+                                    "source_commit_sha256": file_hash(previous / "commit.json"),
+                                    "reason": "identical source/splits/request; L-BFGS implementation unchanged"}
+                atomic_json(reuse_path, reused)
+                self.event("fit_committed", arm=arm, scope=scope, head=head, split=split, reused=True)
         if not _verify(target, binding):
             if (time.monotonic() >= self.deadline or
                     self.max_new_fits is not None and self.new_fits >= self.max_new_fits):
@@ -579,7 +622,8 @@ def _write_report(folder: Path, report: dict[str, Any]) -> list[str]:
 
 
 def run_suite(source: Source, output: Path, config: Config = Config(), *,
-              max_new_fits: int | None = None, refit: bool = False) -> dict[str, Any]:
+              max_new_fits: int | None = None, refit: bool = False,
+              reuse_lbfgs_root: Path | None = None) -> dict[str, Any]:
     """Run committed CPU ablations; a partial run is never reported complete."""
     config.validate()
     if max_new_fits is not None and (type(max_new_fits) is not int or max_new_fits < 0):
@@ -596,13 +640,26 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
                   "implementation_sha256": file_hash(Path(__file__)),
                   "legacy_core_sha256": file_hash(Path(core.__file__)),
                   "legacy_studies_sha256": file_hash(Path(legacy.__file__))}
+    if reuse_lbfgs_root is not None:
+        old = json.loads((reuse_lbfgs_root / "config.json").read_text())
+        def settings(values: dict[str, Any]) -> dict[str, Any]:
+            return {k: v for k, v in values.items() if k != "condition_saga"}
+        if (old.get("protocol") != PROTOCOL or old.get("source") != source.receipt
+                or old.get("implementation_sha256") not in REUSABLE_LBFGS_IMPLEMENTATIONS | {descriptor["implementation_sha256"]}
+                or old.get("baseline_inner_sha256") != descriptor["baseline_inner_sha256"]
+                or old.get("versions") != descriptor["versions"]
+                or settings(old["settings"]) != settings(descriptor["settings"])
+                or (reuse_lbfgs_root / "run.lock").exists()
+                or old.get("legacy_core_sha256") != descriptor["legacy_core_sha256"]
+                or old.get("legacy_studies_sha256") != descriptor["legacy_studies_sha256"]):
+            raise ValueError("Reusable L-BFGS source changes scope, settings, versions or is still locked.")
     root = Path(output) / fingerprint(descriptor)
     root.mkdir(parents=True, exist_ok=True)
     binding = {"descriptor": descriptor}
     if (root / "config.json").exists() and json.loads((root / "config.json").read_text()) != json.loads(json.dumps(descriptor)):
         raise ValueError("Existing study descriptor mismatch.")
     atomic_json(root / "config.json", descriptor)
-    runner = Runner(source, root, config, max_new_fits)
+    runner = Runner(source, root, config, max_new_fits, reuse_lbfgs_root)
     status = {"state": "running", "study_root": str(root), "study_id": root.name,
               "protocol": PROTOCOL, "deployment_requested": refit}
     with core._RunLock(root, recover=False):
@@ -689,8 +746,10 @@ def run_suite(source: Source, output: Path, config: Config = Config(), *,
             atomic_json(report_root / "results.json", all_results)
             unit_manifest = {str(p.relative_to(root)): file_hash(p) for p in (root / "arms").rglob("commit.json")}
             atomic_json(report_root / "unit_manifest.json", unit_manifest)
+            reused = json.loads((root / "reused_units.json").read_text()) if (root / "reused_units.json").exists() else {}
+            atomic_json(report_root / "reused_units.json", reused)
             _publish(report_root, binding, [*files, "comparison.json", "results.json", "unit_manifest.json",
-                                          "solver_control.json", "gate_decision.json"])
+                                          "solver_control.json", "gate_decision.json", "reused_units.json"])
             status.update(state="complete", new_fits=runner.new_fits, report=report)
         except TimeoutError as error:
             status.update(state="partial", reason=str(error), new_fits=runner.new_fits)
@@ -757,13 +816,14 @@ def main() -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-new-fits", type=int)
     parser.add_argument("--refit", action="store_true")
+    parser.add_argument("--reuse-lbfgs-root", type=Path)
     args = parser.parse_args()
     if args.worker is not None:
         return _worker(args.worker)
     if any(v is None for v in (args.release_root, args.baseline_root, args.output)):
         parser.error("Provide release-root, baseline-root and output.")
     result = run_suite(load_source(args.release_root, args.baseline_root), args.output,
-                       max_new_fits=args.max_new_fits, refit=args.refit)
+                       max_new_fits=args.max_new_fits, refit=args.refit, reuse_lbfgs_root=args.reuse_lbfgs_root)
     print(json.dumps({k: v for k, v in result.items() if k != "report"}), flush=True)
     return 0 if result["state"] == "complete" else 2
 

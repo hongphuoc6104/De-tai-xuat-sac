@@ -179,3 +179,11 @@
 - **Giả định sai lầm (Wrong Assumptions):** No ConvergenceWarning implies interchangeable predictions across differently precise solvers, including under validation drift.
 - **Giải pháp & Kết quả kiểm chứng (Resolution & Proof):** Same-source Colab diagnostic found identical transforms; double-precision SAGA and tighter L-BFGS reduced validation delta to0.000108 without outer labels/metrics. v3 casts classifier inputs tofloat64 and locks normalized solver tolerances1e−8, leaving the control gate unchanged. Old partial artifacts remain immutable; full regression and CI precede another production run.
 - **Quy tắc phòng ngừa vàng (Golden Prevention Rule):** Declare and test numerical precision and optimizer accuracy before attributing solver differences to regularization; preserve failed controls rather than relaxing gates after seeing them.
+
+### [ERR-20261016-07] Weighted SAGA: intercept/curvature conditioning
+- Symptom: V3 control fold02/inner02/lambda5 timeout900s;121fits committed.
+- Reproduction Path: Results/image_classification/r0_r3_20261016/execution/diagnose_weights.py, diagnose_centering.py, diagnose_lipschitz.py; same archived train/eval binding; tests/test_image_classification_r0_r3.py::test_conditioned_worker_preserves_logical_objective_and_pipeline.
+- Root Cause: Patient-class weights up to36.2, standardized unweighted features and intercept conditioning slow SAGA on this scope. Merely dividing weights did not converge within2000iterations.
+- Wrong Assumptions: High max_iter or uniform weight rescaling alone guarantees timely convergence; either solver stopping criterion proves equivalence.
+- Resolution & Proof: Weighted train centering plus weighted curvature scaling, compensate C and restore intercept. Exact logical objective unchanged; actual scope converged3809iterations/120.84s, no warnings, validationdelta5.07e−6/objectivedelta1.45e−11. Small real subprocess E2E verifies pipeline inference, objective and C×weight invariance. Compatible L-BFGS cache reuse checks implementation/source/versions/splits/settings/locks and each payload; preserve byte identity/provenance, no old SAGA reuse.
+- Golden Prevention Rule: Verify numerical equivalence on training/inner data, preserve fixed gates and original objective, record solver transformations; never tune a fix using outer quality metrics.

@@ -194,3 +194,80 @@ def test_normalized_solvers_use_high_accuracy_and_double_precision(tmp_path: Pat
         assert model[-1].tol <= 1e-8
         predictions.append(p)
     assert np.max(np.abs(predictions[0] - predictions[1])) < 1e-3
+
+
+def test_conditioned_worker_preserves_logical_objective_and_pipeline(tmp_path: Path) -> None:
+    import joblib
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import Normalizer, StandardScaler
+
+    rng = np.random.default_rng(719)
+    x = (rng.normal(size=(48, 9)) + 2).astype(np.float32)
+    y = np.arange(48) % 2
+    weights = np.ones(48)
+    weights[0] = 32
+    folder = tmp_path / 'conditioned'
+    folder.mkdir()
+    request = {'arm': 'R2_SAGA_CONTROL', 'lambda': .5, 'ratio': 0,
+               'iterations': [2000, 10000], 'tol': 1e-8, 'seed': 17, 'condition_saga': True}
+    (folder / 'request.json').write_text(json.dumps(request))
+    np.savez(folder / 'input.npz', x=x, y=y, weights=weights, evaluate=x[32:])
+    result = subprocess.run([sys.executable, '-m', ablation.WORKER_MODULE, '--worker', str(folder)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    fitted = joblib.load(folder / 'model.joblib')
+    receipt = json.loads((folder / 'fit_receipt.json').read_text())
+    assert receipt['conditioning'] and receipt['solver_weight_divisor'] > 1
+    assert receipt['solver_C'] * receipt['solver_weight_sum'] == pytest.approx(receipt['C'] * weights.sum())
+    reference = Pipeline([('normalizer', Normalizer()), ('scaler', StandardScaler())])
+    z = reference.fit_transform(x).astype(np.float64)
+    model = LogisticRegression(C=receipt['C'], solver='lbfgs', tol=1e-10, max_iter=10000)
+    model.fit(z, y, sample_weight=weights)
+    assert np.max(np.abs(fitted.predict_proba(x)[:, 1] - model.predict_proba(z)[:, 1])) < 1e-5
+    assert np.array_equal(fitted[:-1].transform(x), reference.transform(x))
+    logits = fitted.decision_function(x)
+    objective = np.average(np.logaddexp(0, logits) - y * logits, weights=weights) + .25 * np.square(fitted[-1].coef_).sum()
+    assert receipt['objective'] == pytest.approx(objective, abs=1e-12)
+    with np.load(folder / 'predictions.npz') as predictions:
+        assert np.max(np.abs(predictions['evaluate'] - fitted.predict_proba(x[32:])[:, 1])) < 1e-12
+
+
+def test_reuse_identical_lbfgs_units_only_and_source_unchanged(frozen_source: ablation.Source, config: ablation.Config, tmp_path: Path) -> None:
+    old = ablation.run_suite(frozen_source, tmp_path / 'old', replace(config, condition_saga=False), max_new_fits=1)
+    old_root = Path(old['study_root'])
+    before = {str(p.relative_to(old_root)): file_hash(p) for p in old_root.rglob('*') if p.is_file()}
+    new = ablation.run_suite(frozen_source, tmp_path / 'new', config, max_new_fits=0, reuse_lbfgs_root=old_root)
+    new_root = Path(new['study_root'])
+    assert new['state'] == 'partial' and new['new_fits'] == 0
+    reused = json.loads((new_root / 'reused_units.json').read_text())
+    assert len(reused) == 1 and all(p.startswith('arms/R2/') for p in reused)
+    for relative in reused:
+        assert (old_root / relative / 'commit.json').read_bytes() == (new_root / relative / 'commit.json').read_bytes()
+    assert before == {str(p.relative_to(old_root)): file_hash(p) for p in old_root.rglob('*') if p.is_file()}
+    # R1 can import identical units, while SAGA must execute its new recipe.
+    scope, _, _, inner = ablation.scopes(frozen_source)[0]
+    split = inner[0]
+    train = frozen_source.positions(split['train_image_ids'])
+    evaluate = frozen_source.positions(split['validation_image_ids'])
+    old_runner = ablation.Runner(frozen_source, old_root, config)
+    p, _, unit = old_runner.fit('R1', scope, '4', 'inner-01', train, evaluate, .5)
+    new_runner = ablation.Runner(frozen_source, new_root, config, max_new_fits=0, reuse_lbfgs_root=old_root)
+    reused_p, _, reused_unit = new_runner.fit('R1', scope, '4', 'inner-01', train, evaluate, .5)
+    assert np.array_equal(p, reused_p) and file_hash(unit / 'model.joblib') == file_hash(reused_unit / 'model.joblib')
+    with pytest.raises(TimeoutError):
+        new_runner.fit('R3', scope, 'all', 'inner-01', train, evaluate, .5, .3)
+    descriptor_path = old_root / 'config.json'
+    descriptor = json.loads(descriptor_path.read_text())
+    for key, value in [('implementation_sha256', 'unknown'), ('source', {'changed': True}),
+                       ('baseline_inner_sha256', 'different'), ('versions', {}), ('settings', {})]:
+        descriptor_path.write_text(json.dumps({**descriptor, key: value}))
+        with pytest.raises(ValueError, match='Reusable L-BFGS'):
+            ablation.run_suite(frozen_source, tmp_path / 'reject', config, max_new_fits=0, reuse_lbfgs_root=old_root)
+    descriptor_path.write_text(json.dumps(descriptor))
+    (old_root / 'run.lock').write_text('{}')
+    with pytest.raises(ValueError, match='Reusable L-BFGS'):
+        ablation.run_suite(frozen_source, tmp_path / 'reject', config, max_new_fits=0, reuse_lbfgs_root=old_root)
+    (old_root / 'run.lock').unlink()
+    (unit / 'model.joblib').write_bytes(b'tampered')
+    with pytest.raises(ValueError, match='checksum'):
+        ablation.Runner(frozen_source, tmp_path / 'tamper', config, 0, old_root).fit('R1', scope, '4', 'inner-01', train, evaluate, .5)
