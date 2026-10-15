@@ -186,3 +186,5 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261016-10] Retry SAGA giữ hệ số, bảo toàn logit khi đổi tọa độ và chỉ conditioning ở lượt cuối: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
 
 - [ERR-20261016-11] SAGA timeout và chứng nhận full-batch cùng objective: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-12] Đếm riêng fit và head-selection commits trong exporter: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

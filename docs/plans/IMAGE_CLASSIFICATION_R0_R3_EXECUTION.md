@@ -1,8 +1,8 @@
 # Kế hoạch hiện hành — thử nghiệm head R0–R3 trên RetCCL512
 
-Ngày: **16/10/2026** · phiên bản **1.5** · trạng thái **v6 giữ126fit sau timeout; bổ sung backend full-batch có chứng nhận hội tụ, đang kiểm hồi quy trước production**.
+Ngày: **16/10/2026** · phiên bản **1.5** · trạng thái **hoàn tất186 fit,27 control; giữR0 theo gate; Drive/local handoff đã verify**.
 
-Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Phạm vi lượt hiện tại là cập nhật kế hoạch; không tạo Colab runtime từ việc lưu tài liệu này.
+Tài liệu này thay kế hoạch thực thi tiếp theo trong `IMAGE_CLASSIFICATION_NEXT_STEPS.md` và `IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md`. Các bản ngày 13–14/10 được giữ làm lịch sử, không còn là hàng đợi công việc. Lượt thực nghiệm đã chạy trên một Colab CPU, dùng cache hiện có. Kết quả: [báo cáo R0–R3](../reports/R0_R3_RESULTS_20261016.md).
 
 ## 1. Mục tiêu và phạm vi
 
@@ -19,7 +19,7 @@ So sánh bốn phương án dưới cùng protocol để trả lời: routing th
 - B1 hoàn tất: AUROC 0,869803; AP 0,624167; tại 0,5: accuracy 84,9%, độ nhạy 71,4%, độ đặc hiệu 87,9%. Đây là OOF thăm dò, chưa phải external test.
 - Độ nhạy trung bình đều theo 8 người có ảnh dương là 64,2%; giữa các người dao động 7,7–95,2% tại 0,5. B1 tốt nhất theo điểm ước lượng, chưa được xác nhận tổng quát hóa ngoài cohort.
 - Đã thử per-lens trên **ImageNet512**: pooled AUROC 0,729 → 0,678. Kết quả này không thay cho thử nghiệm RetCCL.
-- R0 không cần train lại. T4 lần trước đã flush/unmount và dừng; không có runner thuộc lượt R0–R3 được khởi tạo.
+- R0 không train lại; kiểm đúng nguồn/commit. R0–R3 đã hoàn tất trên CPU, không trích lại encoder và không dùng T4.
 
 Nguồn công khai trong repo: [kết quả frozen đã hoàn tất](../reports/IMAGE_FROZEN_COMPARISON_20261015.md). Bằng chứng riêng tư local: `Results/image_classification/improvement_resume4_20261015/`; phân tích bổ sung: `Results/image_classification/research_validation_20261016/`.
 
@@ -229,19 +229,19 @@ External test công khai như SICAPv2/TMA là hướng chuẩn bị riêng: audi
 
 ## 13. Cập nhật precision ngày16/10 — không đổi tiêu chí chất lượng
 
-Lượt v2 giữ114fit đã commit rồi dừng tại control lambda0,5/inner1: maxscore delta0,002045 >0,001. Dữ liệu và preprocessing giữa hai solver giống hệt (maxdifference0); L-BFGS gradient còn7,89e−5, SAGA float32 còn1,63e−5. Đối chứng cùng dữ liệu ở float64 và L-BFGS tolerance1e−8 hạ chênh validation còn0,000108, không dùng nhãn hoặc metric outer để chọn sửa.
+Lượt v2 giữ114 fit đã commit rồi dừng tại control lambda0,5/inner1: maxscore delta0,002045 >0,001. Dữ liệu và preprocessing giữa hai solver giống hệt (maxdifference0); L-BFGS gradient còn7,89e−5, SAGA float32 còn1,63e−5. Đối chứng cùng dữ liệu ở float64 và L-BFGS tolerance1e−8 hạ chênh validation còn0,000108, không dùng nhãn hoặc metric outer để chọn sửa.
 
-Bản v3 ghi precision/tolerances vào scientific identity mới; không nới score/objective gate, không đổi folds, weights, grids hay nhãn. R0 và cacheB1 tiếp tục bất biến. Lượt114fit cũ giữ nguyên để audit; không gộp điểm của hai phiên bản số học. Đây là sửa độ chính xác tối ưu hóa cùng objective, không là bằng chứng đã khắc phục overfitting.
+Bản v3 ghi precision/tolerances vào scientific identity mới; không nới score/objective gate, không đổi folds, weights, grids hay nhãn. R0 và cacheB1 tiếp tục bất biến. Lượt114 fit cũ giữ nguyên để audit; không gộp điểm của hai phiên bản số học. Đây là sửa độ chính xác tối ưu hóa cùng objective, không là bằng chứng đã khắc phục overfitting.
 
 ## 14. Conditioning SAGA và tái sử dụng fit L-BFGS ngày16/10
 
-V3 dừng an toàn sau121fit tại SAGA-control fold02/inner02/lambda5 vì vượt deadline900giây. Fold01 control đã đạt, maxscore delta2,10e−5. Đây là lỗi hội tụ/số học, chưa là kết luận chất lượng R3. Không thay tolerance gate, labels, folds hoặc grids.
+V3 dừng an toàn sau121 fit tại SAGA-control fold02/inner02/lambda5 vì vượt deadline900giây. Fold01 control đã đạt, maxscore delta2,10e−5. Đây là lỗi hội tụ/số học, chưa là kết luận chất lượng R3. Không thay tolerance gate, labels, folds hoặc grids.
 
 Chỉ SAGA dùng weighted centering z′=z−μ với μ tính trên train, và chia toàn bộ sample weights cho a=max(1,max(wᵢ(‖z′ᵢ‖²+1))/max(‖z′ᵢ‖²+1)); Csolver=C×a. Tích C×weight giữ nguyên; dịch intercept ngược b=b′−μ·β trước lưu model. Đây là tiền điều kiện tối ưu cùng objective, không thay preprocessing hay tăng độ chính xác bằng thiết kế. Receipt lưu logical/solver C, tổng weights, divisor, center norm, iterations và objective gốc.
 
 Tái hiện đúng scope trên Colab: conditioning hội tụ3809iterations/120,84giây, khôngwarning; maxvalidation score delta5,07e−6, relativeobjective delta1,45e−11 so với R2 L-BFGS. Không dùng outer labels/metrics để chọn sửa. Lần chạy conditioning có scientific identity riêng.
 
-Được nhập lại108fit R1/R2 từ v3 chỉ khi implementation nằm allowlist đã review, source/versions/config/actual splits/core hashes khớp, source không lock và từng unit đúng binding/checksum. Copy nguyên payload/commit, ghi provenance vào reused_units.json và report commit; tuyệt đối không nhập fit SAGA cũ. Kết quả v2/v3partial giữ nguyên để audit. Sau đó chạy lại SAGA-control/R3 và nghiệm thu cùng gate đã khóa.
+Được nhập lại108 fit R1/R2 từ v3 chỉ khi implementation nằm allowlist đã review, source/versions/config/actual splits/core hashes khớp, source không lock và từng unit đúng binding/checksum. Copy nguyên payload/commit, ghi provenance vào reused_units.json và report commit; tuyệt đối không nhập fit SAGA cũ. Kết quả v2/v3partial giữ nguyên để audit. Sau đó chạy lại SAGA-control/R3 và nghiệm thu cùng gate đã khóa.
 
 ## 15. Conditioning dự phòng — không áp dụng mù quáng
 
@@ -255,7 +255,7 @@ Cleanup runner tạm bỏ qua SIGINT lặp lại trong finally, TERM/reap worker
 
 ## 16. Giữ hệ số giữa retry và conditioning ở lượt cuối
 
-V5 giữ115fit rồi timeout900s tại control fold01/inner01/lambda0,05. Scope này trước đây hội tụ khi chạy unconditioned2000(warning) rồi10000(actual6624), tổng231,66giây. Conditioning ngay retry thứ hai làm chậm scope vốn có thể hội tụ bằng cách thông thường; khởi tạo lại mỗi retry cũng bỏ tiến độ đã tính.
+V5 giữ115 fit rồi timeout900s tại control fold01/inner01/lambda0,05. Scope này trước đây hội tụ khi chạy unconditioned2000(warning) rồi10000(actual6624), tổng231,66giây. Conditioning ngay retry thứ hai làm chậm scope vốn có thể hội tụ bằng cách thông thường; khởi tạo lại mỗi retry cũng bỏ tiến độ đã tính.
 
 Bản mới dùng SAGA warm_start trong cùng một fit: 2000 rồi10000 unconditioned, chỉ conditioning ở retry cuối50000 nếu vẫn chưa hội tụ. Giữ nguyên beta; khi đổi offset từμold sangμnew, đổi intercept bnew=bold+(μnew−μold)·beta trước fit, đảm bảo mọi logit không đổi tại thời điểm chuyển tọa độ. C×weights vẫn bất biến; khi lưu, khôi phục intercept về tọa độ scaler gốc. L-BFGS R1/R2 không đổi và được tái sử dụng theo hợp đồng checksum/binding cũ.
 
@@ -266,10 +266,17 @@ Mỗi attempt ghi initialization zero/previous_attempt, conditioning có dùng h
 
 ## Sửa đổi1.5 — backend full-batch cho cùng bài toán ElasticNet
 
-V6 đã hoàn tất126/186fit trước khi control outer2 refit vượt900s. Warm-start/conditioning giúp các inner scope hội tụ nhưng chưa giải quyết chi phí quét lặp của SAGA với2048chiều và trọng số patient-class lớn. Không dùng outer AUROC/AP để thiết kế sửa đổi.
+V6 đã hoàn tất126/186 fit trước khi control outer2 refit vượt900s. Warm-start/conditioning giúp các inner scope hội tụ nhưng chưa giải quyết chi phí quét lặp của SAGA với2048chiều và trọng số patient-class lớn. Không dùng outer AUROC/AP để thiết kế sửa đổi.
 
 R3 vẫn tối ưu đúng weighted mean logistic loss +λ(1−r)||β||²/2+λr||β||1, intercept không phạt. Backend full-batch mới dùng β=u−v,u/v≥0 và SciPy L-BFGS-B; không phải SAGA nên control đổi tên thành R2_SOLVER_CONTROL. Estimator có class/joblib riêng, source hash và backend identity riêng; không trộn SAGA fit cũ vào study mới. Chỉ108R1/R2byte-identical được nhập từ studyv3 theo checksum/binding cũ. Không sửa R0,folds,weights,grids,selection,threshold hoặc quality gate.
 
 Chứng nhận hội tụ độc lập dùng Fenchel dual của weighted logistic +ElasticNet, với μ=λ(1−r)>0. Giải intercept theo score equation; cân bằng dual residual mass trong domain. Báo cáo primal, dual, gap, KKT, split surplus, equality/domain residual, phiên bản SciPy và optimizer options. Sai số equality được trừ khỏi dual lower bound bằng chặn intercept tối ưu; ghi rõ allowance số học float64, không coi status success đơn thuần là bằng chứng. Các tolerance model/score/objective đã khóa không nới.
 
-Tiền kiểm Colab chỉ dùng train/inner numeric scores/objectives:27control scope và8ElasticNet candidates trên inner scope khó; không tính outer quality. Chỉ triển khai sau real-worker E2E, dữ liệu giả2048chiều/correlated/extremeweights/constant/saturation/allgrid, fresh-process serialize, toàn bộ conveyor/CI. Fit thất bại không được giữ lại tham số cũ để suy luận. Mọi study partial trước giữ nguyên để kiểm toán.
+Tiền kiểm Colab chỉ dùng train/inner numeric scores/objectives:27 control scope và8ElasticNet candidates trên inner scope khó; không tính outer quality. Chỉ triển khai sau real-worker E2E, dữ liệu giả2048chiều/correlated/extremeweights/constant/saturation/allgrid, fresh-process serialize, toàn bộ conveyor/CI. Fit thất bại không được giữ lại tham số cũ để suy luận. Mọi study partial trước giữ nguyên để kiểm toán.
+
+
+## Kết quả thực thi1.5 — 16/10/2026
+
+Đủ186 fit và18 head-selection commits;27 numerical controls qua,2.000 paired patient bootstrap cho mỗi cặp. R0 AUROC/AP=0,8698/0,6242;R1=0,8669/0,6448;R2=0,8750/0,6301;R3=0,8819/0,5788. Không nhánh nào đạt gate đã khóa, giữR0; không thực hiện refit-all62 fit bổ sung. Không đổi source, thresholds hoặc grids sau khi xem kết quả.
+
+Bản handoff16.940.586 bytes/828 members đã verify tại Drive và local; khôi phục và suy luận3 vector thật4×/10×/40× khớp. Code executablea9e9bf2:522 tests pass/1 optional skip,12CIchecks xanh. Báo cáo, bảng vật kính/fold, khoảng tin cậy và hướng kiểm định ngoài nằm tại [R0_R3_RESULTS_20261016.md](../reports/R0_R3_RESULTS_20261016.md). Nguồn điều phối hiện tại chuyển sang bàn giao và thiết kế external test; không tự mở rộng search trên18 người bệnh đã dùng phát triển.

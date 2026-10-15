@@ -4,16 +4,16 @@ Mục tiêu hiện tại: **một ảnh gốc 4×, 10× hoặc 40× → có/khô
 
 ## Kế hoạch hiện hành — 16/10/2026
 
-**[IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)** là nguồn điều phối duy nhất cho lượt thử tiếp theo:
+**[IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)** là nguồn điều phối duy nhất cho lượt R0–R3:
 
 | Nhánh | Công việc |
 |---|---|
 | R0 | Giữ B1 RetCCL512 + global L2 LR làm đối chứng bất biến |
 | R1 | Cùng cache, head riêng theo vật kính |
 | R2 | Sample L2 Normalizer → StandardScaler → global L2 LR |
-| R3 | Cùng preprocessing R2 + ElasticNet, có SAGA L2 solver control |
+| R3 | Cùng preprocessing R2 + ElasticNet, có certified full-batch L2 solver control |
 
-Kế hoạch chốt nguồn/identities, shared patient assignments, weights và grids, 186 nested fits trước refit, checkpoint/resume, kiểm thử, báo cáo, gate và ranh giới external test. **Chưa triển khai/chạy R1–R3 theo protocol này.** Việc kế tiếp là P1 phát triển/kiểm thử; dữ liệu thật chạy trên một Colab CPU, không cần T4 hoặc trích lại encoder.
+Kế hoạch chốt nguồn/identities, shared patient assignments, weights và grids, 186 nested fits trước refit, checkpoint/resume, kiểm thử, báo cáo, gate và ranh giới external test. **Đã hoàn tất186 fit và27controls trên Colab CPU; giữR0 theo gate.** [Báo cáo kết quả](../reports/R0_R3_RESULTS_20261016.md), Drive/local handoff đã verify. Việc tiếp theo là thiết kế kiểm định ngoài; không tự mở rộng grid trên cùng OOF.
 
 - [Đường dẫn kế hoạch chính](IMAGE_CLASSIFICATION_NEXT_STEPS.md) và [hướng nghiên cứu](IMAGE_CLASSIFICATION_FEASIBLE_DIRECTIONS.md) đã chuyển sang R0–R3.
 - [Báo cáo frozen ngày 15/10](../reports/IMAGE_FROZEN_COMPARISON_20261015.md): 2.802 ảnh/18 người; ImageNet512 AUROC 0,729, ImageNet1024 0,787, RetCCL512 0,870. Cache/model/OOF đã lưu bền vững, T4 đã dừng; đây là kết quả nội bộ.

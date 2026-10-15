@@ -39,3 +39,8 @@ V5 preserved115fits after a900s weak-control timeout. Numerical E2E now keeps SA
 ### Certified full-batch numerical amendment
 
 V6 preserved126fits after an outer2-control900s deadline. R3/control now use a named float64 split-variable L-BFGS-B estimator for the identical weighted logistic ElasticNet objective. Independent Fenchel primal-dual gap≤1e−10, original-coordinate KKT≤1e−6, split-surplus excess≤1e−10 and optimizer success are required. Dual equality roundoff receives an explicit intercept-bound correction. R2_SOLVER_CONTROL retains score/objective gates1e−3/1e−4. Model/optimizer source hashes, options and certificates are committed; only unchanged R1/R2 fits can be imported. Synthetic tests cover2048correlated dimensions/extremeweights/allgrid/zero/saturation/serialization/failedrefit. Actual Colab numerical-only control:27matched L2 fits +8hard-inner ElasticNet checks passed in10.30seconds, maximum score difference2.84e−6; no outer quality used. Production still requires full regression and CI.
+
+
+### Completed clinical execution
+
+Executable commit a9e9bf2 completed186fits,18head-selection commits and27matched controls. Retained108byte-identical L-BFGS fits and trained78certified full-batch fits. R0/R1/R2/R3 pooled AUROC=0.869803/0.866893/0.875015/0.881889; AP=0.624167/0.644773/0.630089/0.578826. No new arm passed the locked practical gate; retainR0 and skip optional62fit refit-all. Paired2000patient-bootstrap intervals, three-lens restored-vector inference and828archive members verified on Drive/local. See [aggregate results](R0_R3_RESULTS_20261016.md). Final executable regression:522passed/1optional skip,12CIgreen; no GPU or encoder re-extraction.

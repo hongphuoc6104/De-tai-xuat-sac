@@ -220,3 +220,12 @@
 - Wrong Assumptions: Warm retries/conditioning solve runtime for every scope; optimizer success alone certifies the convex solution; a failed refit cannot expose an old fitted state.
 - Resolution & Proof: Same convex objective solved by explicit named split-variable full-batch L-BFGS-B; independently check Fenchel primal/dual gap, KKT, split surplus, dual feasibility and intercept-bound equality correction. Clear fitted attributes before any fit. Synthetic17cases pass plus stale-refit failure-before/pass-after; actual27L2numeric controls and8hard-inner ElasticNet certificates took10.30s with maxscore difference2.84e−6. Full production/regression/CI must precede quality claims; previous partial artifacts retained.
 - Golden Prevention Rule: Separate numerical implementation amendments from model changes, preserve all scientific gates and source identities, certify convergence independently and benchmark the full scope family without outer quality tuning.
+
+
+### [ERR-20261016-12] Export graph count confused fits with head selections
+- Symptom: Completed186-fit study failed first private handoff export with204unit-manifest entries.
+- Reproduction Path: Results/image_classification/r0_r3_20261016/execution/export_count_failure.log; actual launch_export.py→export_handoff.py on completed studyebb7873f… .
+- Root Cause: Unit manifest deliberately includes both fit payload commits and selection.json head commits; exporter compared its total length against resource_benchmark.unique_fits_expected.
+- Wrong Assumptions: Every commit under arms is a fitted estimator; manifest entry count equals fit count.
+- Resolution & Proof: Classify strict payload schemas; require186fit commits and18head-selection commits, match all on-disk commits with report manifest and verify every checksum. Preserve failed log, rerun actual exporter:828members archived/verified,3real-vector restored-model checks identical, local archive SHA matches Drive8d3a2f3e… . No training/OOF values changed.
+- Golden Prevention Rule: Count artifact types by schema and validate complete graph coverage; do not loosen graph validation to make a completed export pass.
