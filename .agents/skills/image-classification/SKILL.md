@@ -5,7 +5,7 @@ description: Huấn luyện phân loại từng ảnh mô học gốc có nhãn 
 
 # Original-image classification
 
-Đọc `docs/plans/IMAGE_STRONG_LABEL_COLAB_EXECUTION.md` cho nguồn/runtime hiện tại và [các lỗi đã tái hiện](references/failures.md) khi sửa pipeline.
+Đọc `docs/plans/IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md` cho kế hoạch hiện hành: R0 bất biến, R1 routing, R2 Normalizer, R3 ElasticNet trên cache RetCCL512/Colab CPU. R1–R3 chưa chạy theo protocol mới; không tự tạo T4 hoặc trích lại features. `IMAGE_STRONG_LABEL_COLAB_EXECUTION.md` là lịch sử lần chạy đầu. Xem [các lỗi đã tái hiện](references/failures.md) khi sửa pipeline.
 
 - Target riêng từng ảnh từ Glade theo xác nhận người dùng: 0→0, 3/4/5→1. Không dùng Ket_Luan/case_label cho mọi ảnh. Giữ raw Glade, không tự diễn giải ISUP/Gleason.
 - Patient ID chỉ là group split. Mọi ảnh/vật kính cùng người cùng partition. Ảnh trùng nội dung hoặc nhãn xung đột phải được disposition trước train; không dựa unique filename để kết luận độc lập.

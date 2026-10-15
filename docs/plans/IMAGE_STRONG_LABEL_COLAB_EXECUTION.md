@@ -1,5 +1,7 @@
 # Thử phân loại ảnh bằng nhãn mạnh trên Colab — 12/10/2026
 
+> **Lịch sử ngày 12/10/2026.** Các trạng thái “chưa train/chưa mount” bên dưới thuộc lần chạy đầu. Kế hoạch hiện hành ngày 16/10 là [R0–R3 trên cache RetCCL512 và Colab CPU](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md); B1 đã hoàn tất, không chạy lại extraction hoặc tạo T4 theo snapshot này.
+
 ## Mục tiêu và nguồn
 
 Một ảnh gốc 4×, 10× hoặc 40× → xác suất ảnh có ung thư. Người dùng xác nhận bác sĩ gán Glade cho từng ảnh: 0 = không ung thư, 3/4/5 = có ung thư. Mã người bệnh chỉ dùng chia dữ liệu và truy hồi, không làm target. Không tạo patch mới.
