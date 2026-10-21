@@ -22,6 +22,7 @@
 - Proof riêngtư: `Results/proofs/uni_preparation_20261021_144042.log` tạiworktree. Proof lưucommands/duration/exitcode/sourcehashes.
 - Dependencyresolution choPython3.13 thànhcông; chưa cài/chạy UNI trênkernelColab3.13 hoặcGPU.
 - Lỗi rawGlade dạngdecimalExcel đã táihiện bằngZIP E2E, sửa bằngparserbaseline, chạy lạiqua và ghiPLAYBOOK.
+- CI đầu phát hiện builderMIL glob nhầm modules/requirementsUNI, làm đổi pinnotebook cũ. Đã táihiệnlocal, sửa bằngallowlistpayloadMIL và kiểm lại2E2E packaging độc lậpTorch; pin cũ giữ nguyên. Kiểm notebookbootstrap đầy đủ cầnTorch, được chạy trong jobMIL cóTorch, không trong môi trườnglocalnhẹ. Bằng chứng bổ sung lưu riêng, không gọi lỗi thiếuTorch là lỗiUNI hoặc giảpass.
 
 ## Điều kiện chưa đạt trước chạy dữ liệu thật
 

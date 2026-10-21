@@ -14,7 +14,7 @@ jobs:
       - name: Verify original-image labels, cache commits, grouped training and runtime package
         run: python -m pytest tests/test_image_classification.py tests/test_image_classification_runtime_builder.py tests/test_image_study_report.py tests/test_image_classification_studies.py tests/test_image_classification_r0_r3.py tests/test_image_classification_batch_optimizer.py tests/test_image_classification_improvement.py tests/test_image_classification_audit.py tests/test_image_classification_execution.py tests/test_retccl_public_download.py tests/test_pathology_encoder.py
       - name: Verify UNI preparation on synthetic images only (no weights or GPU)
-        run: python -m pytest tests/test_uni_preparation.py
+        run: python -m pytest tests/test_uni_preparation.py tests/test_mil_notebook.py::test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements tests/test_mil_notebook.py::test_unrelated_encoder_modules_cannot_change_the_pinned_mil_archive
   mil-cpu:
     runs-on: ubuntu-latest
     steps:

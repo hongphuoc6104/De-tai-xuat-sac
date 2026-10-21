@@ -14,6 +14,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_REQUIREMENTS = {"requirements-mil.txt", "requirements-pretrain.txt", "requirements-data.txt"}
+# Reviewed payload boundary for the already-pinned MIL notebook. New unrelated
+# modules/requirements must never enter this archive through a directory glob.
+MIL_MODULES = (
+    "__init__.py", "__main__.py", "bags.py", "catalog.py", "dual_atlas.py", "dual_cli.py",
+    "dual_common.py", "dual_gpu_smoke.py", "dual_linear_study.py", "dual_member.py", "dual_mil.py",
+    "dual_neural_study.py", "dual_novelty.py", "feature_cli.py", "feature_encoder.py", "feature_sources.py",
+    "features.py", "governance.py", "image_finetune.py", "io.py", "mil_case_cache.py", "mil_checkpoint.py",
+    "mil_data.py", "mil_model.py", "mil_outputs.py", "mil_runtime.py", "mil_study.py", "mil_training.py",
+    "pathology_encoder.py", "precut.py", "pretrain_cli.py", "processing.py", "readiness.py", "shards.py", "splits.py",
+)
+MIL_REQUIREMENTS = (*sorted(REQUIRED_REQUIREMENTS), "requirements-features.txt")
 
 
 def _sha256_file(path: Path) -> str:
@@ -26,13 +37,9 @@ def _sha256_file(path: Path) -> str:
 
 def _runtime_files(source_root: Path) -> list[tuple[Path, str]]:
     source_root = Path(source_root).resolve(strict=True)
-    # Original-image classification has its own runtime and dependency graph.
-    # Its implementation must not invalidate existing MIL notebook pins.
-    candidates = [path for path in (source_root / "histology_data").glob("*.py")
-                  if not path.name.startswith("image_classification")]
+    candidates = [source_root / "histology_data" / name for name in MIL_MODULES]
     candidates.append(source_root / "scripts" / "run_mil.py")
-    candidates.extend(path for path in sorted(source_root.glob("requirements*.txt"))
-                      if path.name != "requirements-image-classification.txt")
+    candidates.extend(source_root / name for name in MIL_REQUIREMENTS)
     required = {
         source_root / "histology_data" / "__init__.py",
         source_root / "scripts" / "run_mil.py",

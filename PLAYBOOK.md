@@ -11,6 +11,14 @@ Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng chung `_parse_glade`, giữ raw Glade byte-for-value trong metadata và so target; chạy lại cùng E2E và suite UNI trước bàn giao.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Feature pipeline mới không được định nghĩa lại mapping nhãn hoặc chuẩn hóa mất biểu diễn raw của baseline.
 
+### [ERR-20261021-02] Module encoder mới làm đổi checksum notebook MIL cũ
+- **Triệu chứng (Symptom):** CI MIL thất bại vì runtime mới khác PINNED_RUNTIME_SHA256, dù code MIL/weights không đổi.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_mil_notebook.py::test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements`; đã quan sát FAIL tại local sau failure CI39619202753, builder tạoZIP thật rồi so pin notebook.
+- **Nguyên nhân cốt lõi (Root Cause):** Builder glob mọi module/requirements ngoài blacklist image_classification; namespaceUNI mới bị đưa nhầm vào gói MIL.
+- **Giả định sai (Wrong Assumptions):** Loại một prefix là đủ cách ly mọi pipeline tương lai.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Khóa allowlist payload MIL đã review, giữ nguyên bytes và notebookpin cũ; thêm E2E đưa module/requirements lạ vào source mà ZIP vẫn bất biến. Chạy lại notebookbootstrap và CI trước bàn giao.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Gói runtime đã pin phải dùng manifest sở hữu rõ ràng; không quét tự động các namespace không thuộc pipeline.
+
 ---
 
 ## I. Hướng Dẫn Đóng Góp Bài Học (Contribution Protocol)

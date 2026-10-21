@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import shutil
 import sys
 import zipfile
 from datetime import timedelta
@@ -13,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from scripts.build_mil_runtime import build_runtime_archive
+from scripts.build_mil_runtime import _runtime_files, build_runtime_archive
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTEBOOK = ROOT / "notebooks" / "Colab_MIL_Training.ipynb"
@@ -57,6 +58,21 @@ def test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements
     match = re.search(r'PINNED_RUNTIME_SHA256\s*=\s*"([0-9a-f]{64})"', settings)
     assert match is not None
     assert match.group(1) == first["sha256"]
+
+
+def test_unrelated_encoder_modules_cannot_change_the_pinned_mil_archive(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    for path, relative in _runtime_files(ROOT):
+        destination = source / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, destination)
+    first = build_runtime_archive(source, tmp_path / "first.zip")
+    (source / "histology_data/unrelated_encoder.py").write_text("# unrelated future encoder\n")
+    (source / "requirements-unrelated.txt").write_text("huge-library==1.0\n")
+    second = build_runtime_archive(source, tmp_path / "second.zip")
+    assert second["sha256"] == first["sha256"]
+    assert "histology_data/unrelated_encoder.py" not in second["files"]
+    assert "requirements-unrelated.txt" not in second["files"]
 
 
 def test_actual_notebook_bootstrap_cells_use_only_root_and_sha_overrides(
