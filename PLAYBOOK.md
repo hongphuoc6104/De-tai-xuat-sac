@@ -3,6 +3,22 @@
 Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công trong dự án.
 **Mục tiêu:** Lưu vết nguyên nhân cốt lõi, phòng ngừa tái phạm, biến mỗi sai sót thành năng lực kỹ thuật lâu dài cho Agent.
 
+### [ERR-20261021-01] Bộ nạp UNI từ chối biểu diễn Glade hợp lệ của Excel
+- **Triệu chứng (Symptom):** ZIP extraction mới từ chối raw Glade `0.0`/`3.0` dù parser nhãn gốc chấp nhận.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_uni_preparation.py::test_decimal_excel_glade_is_preserved_through_zip_extraction`; fixture tạo ZIP thật, gọi producer extraction và đọc lại cache. Đã quan sát FAIL tại validate_rows trước sửa.
+- **Nguyên nhân cốt lõi (Root Cause):** Schema mới kiểm chuỗi literal thay vì dùng parser Glade đã được kiểm chứng của nguồn baseline.
+- **Giả định sai (Wrong Assumptions):** Excel luôn giữ mã số dưới dạng chuỗi số nguyên.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng chung `_parse_glade`, giữ raw Glade byte-for-value trong metadata và so target; chạy lại cùng E2E và suite UNI trước bàn giao.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Feature pipeline mới không được định nghĩa lại mapping nhãn hoặc chuẩn hóa mất biểu diễn raw của baseline.
+
+### [ERR-20261021-02] Module encoder mới làm đổi checksum notebook MIL cũ
+- **Triệu chứng (Symptom):** CI MIL thất bại vì runtime mới khác PINNED_RUNTIME_SHA256, dù code MIL/weights không đổi.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_mil_notebook.py::test_runtime_builder_is_reproducible_and_contains_only_code_and_requirements`; đã quan sát FAIL tại local sau failure CI39619202753, builder tạoZIP thật rồi so pin notebook.
+- **Nguyên nhân cốt lõi (Root Cause):** Builder glob mọi module/requirements ngoài blacklist image_classification; namespaceUNI mới bị đưa nhầm vào gói MIL.
+- **Giả định sai (Wrong Assumptions):** Loại một prefix là đủ cách ly mọi pipeline tương lai.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Khóa allowlist payload MIL đã review, giữ nguyên bytes và notebookpin cũ; thêm E2E đưa module/requirements lạ vào source mà ZIP vẫn bất biến. Chạy lại notebookbootstrap và CI trước bàn giao.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Gói runtime đã pin phải dùng manifest sở hữu rõ ràng; không quét tự động các namespace không thuộc pipeline.
+
 ---
 
 ## I. Hướng Dẫn Đóng Góp Bài Học (Contribution Protocol)
@@ -79,6 +95,14 @@ Chi tiết đã chuyển vào [.agents/skills/histology-shards/references/failur
 - **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Escape dấu cách của WorkingDirectory= thành \x20, giữ quote riêng cho từng đối số ExecStart; kiểm tra lại unit bằng systemd-analyze --user verify và test hồi quy E2E, cả hai đều pass.
 - **Quy tắc phòng ngừa vàng (Golden Rule):** Dùng cú pháp escape theo loại directive của systemd; không áp dụng shell quoting vào giá trị đường dẫn trong unit file.
 
+### [ERR-20261010-01] Colab CLI Trả Mã 0 Cho Phiên Không Còn Tồn Tại
+- **Triệu chứng (Symptom):** `connect` để phiên đã mất ở trạng thái đang chạy; timer tiếp tục tính phút, và kiểm tra sau timeout của `create` có thể ghi nhận phiên không tồn tại là tạo thành công.
+- **Tái hiện E2E (Reproduction Path):** Gọi `colab-profile ad8410552 status --session <tên-test-ngẫu-nhiên>` với một tên chưa tồn tại: CLI trả mã 0 cùng `[colab] Session '<tên>' not found.` hoặc `No active sessions found on server.`. Lặp lại luồng `connect`/`watch` với state và profile registry tạm; hồi quy được giữ tại `tests/test_colab_manager.py`.
+- **Nguyên nhân cốt lõi (Root Cause):** Các consumer chỉ gọi bộ phân loại missing-session sau khi kiểm tra mã thoát khác 0; mẫu nhận diện cũng không khớp thông báo “No active sessions found”.
+- **Giả định sai (Wrong Assumptions):** Mã thoát 0 của lệnh `status` luôn đồng nghĩa phiên còn hoạt động.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Phân loại thông điệp missing bất kể mã thoát, nhận diện tên phiên hợp lệ dài đến 64 ký tự cùng mẫu “no active sessions”, đóng timer interval ở `connect`/poll và từ chối ghi nhận thành công sau timeout khi status báo không có phiên. E2E read-only với CLI thật xác nhận `connect` và poll đều đóng state tạm; 20 test Colab Manager và toàn bộ 96 tests pass. Proof: `Results/proofs/test_evidence_20261010_144242.log`; CI chạy bộ Colab Manager ở bước riêng.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Dựa trên nội dung rõ ràng của phản hồi status để xác định phiên có tồn tại; không suy ra từ mã thoát riêng lẻ.
+
 
 ## V. Bài học đã chuyển thành skill
 
@@ -144,3 +168,39 @@ Chi tiết: [.agents/skills/histology-shards/references/failures.md](.agents/ski
 - [ERR-20261012-01] File API upload cần parent tồn tại: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
 
 - [ERR-20261012-27] B1 report producer/consumer và subset coverage: xem [.agents/skills/histology-mil/references/dual_failures.md](.agents/skills/histology-mil/references/dual_failures.md).
+
+- [ERR-20261012-28..34] TIFF original-image decode, patch guard, readiness, content leakage, ZIP rebind và runtime packaging: xem [.agents/skills/image-classification/SKILL.md](.agents/skills/image-classification/SKILL.md).
+
+- [ERR-20261014-01] Reporter/producer scaler audit schema drift: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-02..05] Fixed-patient head studies: JSON replay, budget owner, per-head threshold/routing; xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-06] Cached lab archive preflight, atomic source review and complete evidence graph: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-07] New frozen release vs fixed baseline source binding: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-08] Shared source-bundle/notebook pin synchronization after module integration: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261014-09] Resume chỉ-đọc cho N0/cache hoàn tất, thư mục attempt riêng và phân loại lỗi RetCCL: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261015-01] Public RetCCL Drive confirmation, no-cookie gdown resume và TOFU SHA receipt: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261015-02] Manifest có thể thuộc feature release chưa hoàn tất; phân biệt cache resumable và complete bằng verifier: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261015-03] DriveFS credential HTTP404 trên T4 còn sống và kiểm chứng mount trong kernel CLI: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261015-04] Contents API503 trong lúc encoder vẫn sống, backoff và lọc proxy query: xem [.agents/skills/colab-runtime-recovery/references/failures.md](.agents/skills/colab-runtime-recovery/references/failures.md).
+
+- [ERR-20261015-05] Schema CSV và numerical equivalence trong đối chiếu OOF: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-01..06] R0–R3 canonical resume identities, CLI worker entry, read-only source validation and bounded timeout escalation: see [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-07] Weighted SAGA conditioning giữ objective và nhập cache L-BFGS có provenance: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-08..09] Universal conditioning latency và cleanup nhóm subprocess Colab khi interrupt: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-10] Retry SAGA giữ hệ số, bảo toàn logit khi đổi tọa độ và chỉ conditioning ở lượt cuối: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-11] SAGA timeout và chứng nhận full-batch cùng objective: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).
+
+- [ERR-20261016-12] Đếm riêng fit và head-selection commits trong exporter: xem [.agents/skills/image-classification/references/failures.md](.agents/skills/image-classification/references/failures.md).

@@ -1,0 +1,34 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /data/đề tài xuất sắc/.worktrees/image-classification
+configfile: pyproject.toml
+collected 15 items
+
+tests/test_image_classification_studies.py .........F...FF               [100%]
+
+=================================== FAILURES ===================================
+___________ test_complete_lab_uses_cache_and_publishes_source_review ___________
+tests/test_image_classification_studies.py:181: in test_complete_lab_uses_cache_and_publishes_source_review
+    assert {"baseline_diagnostics.json", "review/review_receipt.json", "review/4x-review.png"} <= set(commit["files"])
+E   AssertionError: assert {'baseline_di...receipt.json'} <= {'comparison...., 'report.md'}
+E     
+E     Extra items in the left set:
+E     'review/4x-review.png'
+E     'baseline_diagnostics.json'
+E     'review/review_receipt.json'
+________________ test_partial_archive_map_fails_before_training ________________
+tests/test_image_classification_studies.py:239: in test_partial_archive_map_fails_before_training
+    assert not (data.run_root / "head_studies").exists()
+E   AssertionError: assert not True
+E    +  where True = exists()
+E    +    where exists = (PosixPath('/tmp/pytest-of-hongphuoc/pytest-14/test_partial_archive_map_fails0/baseline/features/runs/9076a3efdf3fcd2b853902da06f9ad65764db076fb937d35841bfbdb5fa9f1b1') / 'head_studies').exists
+E    +      where PosixPath('/tmp/pytest-of-hongphuoc/pytest-14/test_partial_archive_map_fails0/baseline/features/runs/9076a3efdf3fcd2b853902da06f9ad65764db076fb937d35841bfbdb5fa9f1b1') = StudyData(run_root=PosixPath('/tmp/pytest-of-hongphuoc/pytest-14/test_partial_archive_map_fails0/baseline/features/run..., 16, 19, 22, 25, 28, 31, 34]))], assignment_sha256='84e31ac9d6a1ceb0e8a37eb6055ab1f07f7713187406beee3287066825b40a6f').run_root
+_____________ test_source_review_refuses_existing_private_symlink ______________
+tests/test_image_classification_studies.py:251: in test_source_review_refuses_existing_private_symlink
+    with pytest.raises(ValueError, match="symlink|existing|receipt"):
+E   Failed: DID NOT RAISE ValueError
+=========================== short test summary info ============================
+FAILED tests/test_image_classification_studies.py::test_complete_lab_uses_cache_and_publishes_source_review
+FAILED tests/test_image_classification_studies.py::test_partial_archive_map_fails_before_training
+FAILED tests/test_image_classification_studies.py::test_source_review_refuses_existing_private_symlink
+======================== 3 failed, 12 passed in 13.23s =========================

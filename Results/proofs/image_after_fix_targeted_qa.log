@@ -1,0 +1,10 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: /data/đề tài xuất sắc/.worktrees/image-classification
+configfile: pyproject.toml
+collected 16 items
+
+tests/test_image_classification.py .............                         [ 81%]
+tests/test_image_classification_runtime_builder.py ...                   [100%]
+
+============================== 16 passed in 2.29s ==============================
