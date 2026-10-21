@@ -2,7 +2,13 @@
 
 Mục tiêu hiện tại: **một ảnh gốc 4×, 10× hoặc 40× → có/không ung thư**, dùng nhãn bác sĩ của từng ảnh. Patient ID dùng chia dữ liệu, không làm mục tiêu chẩn đoán ca. MIL cấp ca và clustering patch là lịch sử tham khảo.
 
-## Kế hoạch hiện hành — 16/10/2026
+## Kế hoạch hiện hành — 21/10/2026
+
+**[UNI_FINAL_PREPARATION.md](UNI_FINAL_PREPARATION.md)** là kế hoạch chốt mới: frozenUNI + global/mean/max views + L2LR, phân loại từng ảnh gốc. **Hiện chỉ chuẩn bị phần mềm và kiểm thử synthetic; chưa train dữ liệu thật, chưa có quyền/weightsUNI hoặcGPU smoke đã xác minh.**
+
+[Hướng dẫn vận hành](../UNI_RUN_GUIDE.md). Không tự tạoColab, trích lạiB1 hay chạyLoRA. R0–R3 dưới đây là kết quả hoàn tất và nguồn đối chứng, không phải hàng đợi cần chạy lại.
+
+## Lượt đã hoàn tất — 16/10/2026
 
 **[IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)** là nguồn điều phối duy nhất cho lượt R0–R3:
 

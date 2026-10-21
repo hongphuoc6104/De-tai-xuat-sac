@@ -1,5 +1,7 @@
 # Kế hoạch tiếp tục phân loại từng ảnh gốc
 
+**Cập nhật21/10/2026:** hàng đợi hiện tại là **[chuẩn bị UNI](UNI_FINAL_PREPARATION.md)**, chỉ gồm phần mềm/tài liệu/fixture giả. Chưa chạyGPU hoặc dữ liệu thật. Phần dưới là snapshot trướcR0–R3; các câu “chưa triển khai/chạy” không còn là trạng thái hiện tại. R0–R3 đã hoàn tất, xem [báo cáo](../reports/R0_R3_RESULTS_20261016.md).
+
 Cập nhật: **16/10/2026**. Kế hoạch thực thi hiện hành là **[R0–R3 trên cache RetCCL512](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)**.
 
 ## Công việc kế tiếp

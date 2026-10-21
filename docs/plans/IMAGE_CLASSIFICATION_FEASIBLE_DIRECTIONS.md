@@ -1,5 +1,7 @@
 # Hướng nghiên cứu hiện hành cho phân loại ảnh
 
+**Cập nhật21/10/2026:** chốt **[UNI frozen + views + globalL2LR](UNI_FINAL_PREPARATION.md)**. Chỉ chuẩn bị phần mềm; không khởi chạy thử nghiệm/training. Nội dung dưới là lịch sử; R0–R3 đã hoàn tất và không tự chạy lại.
+
 Cập nhật: **16/10/2026**. Thay hàng đợi nghiên cứu ngày 14/10 bằng **[kế hoạch R0–R3](IMAGE_CLASSIFICATION_R0_R3_EXECUTION.md)**.
 
 Ưu tiên hiện tại là thử routing, feature normalization và sparsity trên cache RetCCL512 bằng Colab CPU. Giữ B1 làm mốc bất biến, patient-disjoint assignments và nhãn toàn ảnh. Không trích lại ảnh hoặc mở rộng model-grid trong lượt này.

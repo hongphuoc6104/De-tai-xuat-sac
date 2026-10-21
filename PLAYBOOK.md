@@ -3,6 +3,14 @@
 Sổ tay này lưu trữ toàn bộ các bài học sau khi fix bug thành công trong dự án.
 **Mục tiêu:** Lưu vết nguyên nhân cốt lõi, phòng ngừa tái phạm, biến mỗi sai sót thành năng lực kỹ thuật lâu dài cho Agent.
 
+### [ERR-20261021-01] Bộ nạp UNI từ chối biểu diễn Glade hợp lệ của Excel
+- **Triệu chứng (Symptom):** ZIP extraction mới từ chối raw Glade `0.0`/`3.0` dù parser nhãn gốc chấp nhận.
+- **Tái hiện E2E (Reproduction Path):** `python -m pytest tests/test_uni_preparation.py::test_decimal_excel_glade_is_preserved_through_zip_extraction`; fixture tạo ZIP thật, gọi producer extraction và đọc lại cache. Đã quan sát FAIL tại validate_rows trước sửa.
+- **Nguyên nhân cốt lõi (Root Cause):** Schema mới kiểm chuỗi literal thay vì dùng parser Glade đã được kiểm chứng của nguồn baseline.
+- **Giả định sai (Wrong Assumptions):** Excel luôn giữ mã số dưới dạng chuỗi số nguyên.
+- **Giải pháp & Kiểm chứng (Resolution & E2E Proof):** Dùng chung `_parse_glade`, giữ raw Glade byte-for-value trong metadata và so target; chạy lại cùng E2E và suite UNI trước bàn giao.
+- **Quy tắc phòng ngừa vàng (Golden Rule):** Feature pipeline mới không được định nghĩa lại mapping nhãn hoặc chuẩn hóa mất biểu diễn raw của baseline.
+
 ---
 
 ## I. Hướng Dẫn Đóng Góp Bài Học (Contribution Protocol)

@@ -12,9 +12,11 @@ import zipfile
 from pathlib import Path
 
 
-def _requirements_files(source_root: Path) -> list[Path]:
+def _requirements_files(source_root: Path, entry_name: str = "requirements-image-classification.txt") -> list[Path]:
     """Resolve the runtime's local requirements closure without outside paths."""
-    pending = [source_root / "requirements-image-classification.txt"]
+    if Path(entry_name).name != entry_name or not entry_name.startswith("requirements") or not entry_name.endswith(".txt"):
+        raise ValueError("Unsafe requirements entry filename.")
+    pending = [source_root / entry_name]
     resolved: set[Path] = set()
     while pending:
         path = pending.pop()
@@ -36,12 +38,12 @@ def _requirements_files(source_root: Path) -> list[Path]:
     return sorted(resolved)
 
 
-def build_runtime(source_root: Path, output: Path) -> dict[str, object]:
+def build_runtime(source_root: Path, output: Path, *, requirements_name: str = "requirements-image-classification.txt") -> dict[str, object]:
     """Package source modules and the image CLI, excluding datasets and secrets."""
     source_root = source_root.resolve(strict=True)
     files = sorted((source_root / "histology_data").glob("*.py"))
     files.append(source_root / "scripts/run_image_classification.py")
-    files.extend(_requirements_files(source_root))
+    files.extend(_requirements_files(source_root, requirements_name))
     required = {"histology_data/image_classification.py", "histology_data/image_classification_cli.py"}
     names = {p.relative_to(source_root).as_posix() for p in files}
     if not required.issubset(names):
@@ -76,8 +78,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--requirements", default="requirements-image-classification.txt")
     args = parser.parse_args()
-    print(json.dumps(build_runtime(args.source_root, args.output), ensure_ascii=False, indent=2))
+    print(json.dumps(build_runtime(args.source_root, args.output, requirements_name=args.requirements), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
